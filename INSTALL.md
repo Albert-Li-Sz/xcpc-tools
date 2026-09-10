@@ -139,13 +139,21 @@ sudo apt update
 
 ### 2.1 选择安装包
 
-在 [GitHub Releases](https://github.com/hydro-dev/xcpc-tools/releases/) 中选定一个版本。Ubuntu 部署使用以下发布文件：
+在 [本仓库的 GitHub Releases](https://github.com/Albert-Li-Sz/xcpc-tools/releases/) 中选定一个版本。Ubuntu 部署使用以下发布文件：
 
 | 文件 | 使用方式 |
 | --- | --- |
 | `xcpc-tools-linux.tar.gz` | Linux 核心程序 |
 | `xcpc-tools-bundle.js` | 使用本机 Node.js 运行 |
 | `xcpc-tools-machine-tools-linux.tar.gz` | Linux 选手机 GUI、Probe 与 systemd unit |
+
+同时下载该 Release 的 `SHA256SUMS`，在安装包所在目录校验：
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+确认每个已下载安装包均显示 `OK`，且命令成功结束，再继续安装。源码和安装包应来自同一个 Release。
 
 先检查压缩包实际目录和 CPU 架构。核心包由当前工作流保留 `dist/pkg/` 路径；Machine Tools 包内容直接位于归档根目录。没有对应架构的核心可执行文件时，使用 JS bundle 或 [源码构建](#development)，不要将操作系统名称等同于架构兼容保证。
 
@@ -1141,7 +1149,7 @@ python3 --version
 sudo env PATH="/opt/node24/bin:/usr/bin:/bin" npm install --global corepack
 sudo env PATH="/opt/node24/bin:/usr/bin:/bin" corepack enable
 
-git clone https://github.com/hydro-dev/xcpc-tools.git
+git clone https://github.com/Albert-Li-Sz/xcpc-tools.git
 cd xcpc-tools
 
 # 正式部署先切到已选定版本；将占位符替换为实际 tag 或 commit
