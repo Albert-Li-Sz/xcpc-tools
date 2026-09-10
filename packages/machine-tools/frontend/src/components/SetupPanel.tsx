@@ -452,7 +452,7 @@ export function SetupPanel({
                         />
                         <PasswordInput
                             label="上报 Token"
-                            description="同时用于 HTTP 和 WebSocket 上报；服务端 reportToken 为空时这里也留空"
+                            description="填写服务端 monitor.reportToken；HTTP 和 WebSocket 上报均需此密钥，空值无法上报"
                             value={reportToken}
                             onChange={(event) => setReportToken(event.currentTarget.value)}
                             size="md"

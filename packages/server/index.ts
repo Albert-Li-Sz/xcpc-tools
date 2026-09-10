@@ -9,15 +9,17 @@ import { fs, Logger } from './utils';
 const logger = new Logger('tools');
 
 process.on('unhandledRejection', (e) => { logger.error(e); });
-process.on('uncaughtException', (e) => { logger.error(e); });
+process.on('uncaughtException', (e) => { logger.error(e); process.exit(1); });
 Error.stackTraceLimit = 50;
 const app = new Context();
 const tmpdir = path.resolve(os.tmpdir(), 'xcpc-tools');
 fs.ensureDirSync(tmpdir);
 
+const maintenance = ['--backup', '--restore', '--recover-restore'].some((option) => process.argv.includes(option));
 let config;
 try {
-    config = require('./config').config;
+    if (!maintenance && !process.argv.includes('--client')) require('./utils/instanceLock').assertNoInterruptedRestore();
+    if (!maintenance) config = require('./config').config;
 } catch (e) {
     if (e.message !== 'no-config') throw e;
 }
@@ -38,6 +40,7 @@ async function applyServer(ctx: Context) {
             c.plugin(require('./handler/balloon')),
             c.plugin(require('./handler/commands')),
             c.plugin(require('./handler/ssh')),
+            c.plugin(require('./handler/operations')),
         ]);
         c.server.listen();
     });
@@ -59,6 +62,8 @@ async function apply(ctx) {
     if (process.argv.includes('--client')) {
         await applyClient(ctx);
     } else {
+        const release = require('./utils/instanceLock').acquireDataLock();
+        process.once('exit', release);
         ctx.plugin(DBService);
         ctx.inject(['dbservice'], (c) => {
             applyServer(c);
@@ -84,3 +89,5 @@ app.plugin(LoggerService, {
 });
 
 if (config) app.inject(['logger', 'timer'], (ctx) => apply(ctx));
+
+if (maintenance) require('./service/backup').runMaintenance().catch((error) => { logger.error(error); process.exitCode = 1; });

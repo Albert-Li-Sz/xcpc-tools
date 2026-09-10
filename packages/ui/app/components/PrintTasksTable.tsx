@@ -6,7 +6,7 @@ import {
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import {
-  IconCheck, IconEye, IconHourglassEmpty, IconPrinter, IconRefresh, IconX,
+  IconAlertTriangle, IconCheck, IconEye, IconHourglassEmpty, IconPrinter, IconRefresh, IconX,
 } from '@tabler/icons-react';
 import React from 'react';
 
@@ -18,6 +18,8 @@ interface PrintTaskRowProps {
 
 const PrintTaskRow = React.memo(({ colorCode, task, refresh }: PrintTaskRowProps) => {
   const [loading, setLoading] = React.useState(false);
+  const needsReview = task.stage === 'needs_review';
+  const failed = task.stage === 'failed';
   const printGroup = task.group || task.matchedGroup;
   const showPrintGroup = task.printer && printGroup && String(printGroup).toUpperCase() !== 'ALL';
 
@@ -86,11 +88,11 @@ const PrintTaskRow = React.memo(({ colorCode, task, refresh }: PrintTaskRowProps
         <ThemeIcon
           radius="xl"
           size="sm"
-          color={task.done ? 'green' : task.printer ? 'blue' : 'gray'}
+          color={task.done ? 'green' : needsReview ? 'orange' : failed ? 'red' : task.printer ? 'blue' : 'gray'}
           role="img"
-          aria-label={task.done ? 'Done' : task.printer ? 'Sent to printer' : 'Waiting'}
+          aria-label={task.done ? 'Done' : needsReview ? 'Needs review' : failed ? 'Failed' : task.printer ? 'Sent to printer' : 'Waiting'}
         >
-          { task.done ? <IconCheck /> : task.printer ? <IconPrinter /> : <IconHourglassEmpty /> }
+          { task.done ? <IconCheck /> : needsReview || failed ? <IconAlertTriangle /> : task.printer ? <IconPrinter /> : <IconHourglassEmpty /> }
         </ThemeIcon>
       </Table.Td>
       <Table.Td>
@@ -112,7 +114,11 @@ const PrintTaskRow = React.memo(({ colorCode, task, refresh }: PrintTaskRowProps
           </Stack>
         </Tooltip>
       </Table.Td>
-      <Table.Td>{task.filename}({task.lang})</Table.Td>
+      <Table.Td>
+        <Text size="sm">{task.filename}({task.lang})</Text>
+        {(needsReview || failed) && <Badge color={needsReview ? 'orange' : 'red'} size="xs">{needsReview ? 'Needs review' : 'Failed'}</Badge>}
+        {task.lastError && <Text size="xs" c="dimmed" lineClamp={2}>{task.lastError}</Text>}
+      </Table.Td>
       <Table.Td style={{ width: 200, minWidth: 200, maxWidth: 200 }}>
         <LoadingOverlay visible={loading} zIndex={1000} overlayProps={{ radius: 'sm', blur: 2 }} />
         <Group justify="center" gap="xs">
@@ -132,7 +138,9 @@ const PrintTaskRow = React.memo(({ colorCode, task, refresh }: PrintTaskRowProps
           </Tooltip>
           <Tooltip label="Done">
             <ActionIcon size="lg" variant="subtle" color="green" aria-label='Done' onClick={
-              () => codeActions(task._id, 'done')}><IconCheck size={22} />
+              () => (needsReview ? modals.openConfirmModal({
+                title: 'Confirm physical print', children: <Text>Mark this task done only after checking that its pages were printed.</Text>, labels: { confirm: 'Printed', cancel: 'Cancel' }, onConfirm: () => codeActions(task._id, 'done'),
+              }) : codeActions(task._id, 'done'))}><IconCheck size={22} />
             </ActionIcon>
           </Tooltip>
           <Tooltip label="Remove">
@@ -158,7 +166,9 @@ export function PrintTasksTable({ colorCode, codes, refresh }) {
             <Table.Th>Time</Table.Th>
             <Table.Th>Team</Table.Th>
             <Table.Th>Filename</Table.Th>
-            <Table.Th style={{ width: 200, minWidth: 200, maxWidth: 200, textAlign: 'center' }}>Actions</Table.Th>
+            <Table.Th style={{
+              width: 200, minWidth: 200, maxWidth: 200, textAlign: 'center',
+            }}>Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>{ codes.map((task) => <PrintTaskRow key={task._id} task={task} colorCode={colorCode} refresh={refresh} />) }</Table.Tbody>

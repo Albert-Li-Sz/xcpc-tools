@@ -13,7 +13,7 @@ type SocketFactory = (url: string) => WebSocket;
 export function testProbeReport(
     probeUrl: string,
     token: string,
-    snapshot: MachineSnapshot,
+    _snapshot: MachineSnapshot,
     createSocket: SocketFactory = (url) => new WebSocket(url),
 ): Promise<ProbeTestResult> {
     return new Promise((resolve, reject) => {
@@ -39,7 +39,7 @@ export function testProbeReport(
         timer = globalThis.setTimeout(() => finish(new Error('WebSocket 测试上报超时')), 10_000);
 
         socket.addEventListener('open', () => {
-            socket.send(JSON.stringify({ type: 'hello', probe: snapshot }));
+            socket.send(JSON.stringify({ type: 'test' }));
         });
         socket.addEventListener('message', (event) => {
             let message: ProbeServerMessage;
@@ -49,7 +49,7 @@ export function testProbeReport(
                 finish(new Error('服务器返回了非 JSON WebSocket 消息'));
                 return;
             }
-            if (message.type === 'welcome') {
+            if (message.type === 'test-ok') {
                 finish();
             }
         });

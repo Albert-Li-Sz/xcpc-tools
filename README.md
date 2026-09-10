@@ -17,7 +17,7 @@ Server 端分为 `Server Mode` 和 `Fetch Mode` ，在 `Fetch Mode` 下支持获
 
 在 [Releases](https://github.com/hydro-dev/xcpc-tools/releases/) 下载已经封装好的 Windows, Linux, macOS 二进制使用，如有未封装好的架构但 Node.js 支持的系统或系统内已有 Node.js 亦可下载 `xcpc-tools-bundle.js`使用。
 
-下载后首次运行可见填写配置文件字样，打开 `config.yaml` ，如使用 `Fetch Mode` 请填写相关赛事系统配置，如使用 `Server Mode` 则无须填写配置可直接启动。
+下载后首次运行会生成 `config.server.yaml`。如使用 `Fetch Mode`，请填写相关赛事系统配置；独立运行则使用 `type: server`，核对登录密码和客户端凭据后重启。
 
 系统配置介绍如下：
 
@@ -82,7 +82,11 @@ printers:
   - HP-Backup # 未配置 group，全局使用
 ```
 
-打印任务领取后不会自动回收，避免无法确认物理打印结果时重复打印；需要重新派发时由管理员在打印页面手动 Reprint。重置已派发任务可能造成重复打印，页面会明确提示这一风险。
+打印接口会在写入前校验队伍 ID、队名、原文件名及内容大小（最多 256 KiB），文件使用服务端生成的任务 ID 保存。队伍 ID 和原文件名不能包含路径分隔符。
+
+打印客户端使用协议 v4，升级时必须同步更新服务端和打印客户端；旧版客户端会被明确拒绝。每次领取前，客户端先持久化随机请求编号；响应丢失或重启后，服务端按编号恢复同一次领取，防止额外分配任务。客户端将领取、提交打印和等待确认的状态写入 `data/print-journal/`，重启后继续确认已提交的任务。PDF 转换等提交前失败最多自动尝试 3 次；达到上限显示 `Failed`。已经提交给打印系统但结果不确定的任务显示 `Needs review`，不会自动重打。
+
+管理员应先核对打印机队列和纸张输出，再将 `Needs review` 标记为 `Done`，或通过 `Reprint` 重新派发。`Done` 表示打印系统接受了任务或管理员确认完成，不能代替实际出纸检查。手动重新派发已提交任务可能造成重复打印。升级、迁移和重启时请保留原客户端工作目录中的打印日志；每个客户端工作目录仅运行一个打印进程，程序通过目录锁强制执行。`Checks` 会提示领取超过 5 分钟仍未结束的任务；需结合打印队列核对，不能直接假定未打印。
 
 #### Balloon
 服务支持 `Fetch Mode` 下的气球推送，支持 `DOMjudge` 与 `Hydro` 系统，支持 `DOMjudge` 与 `Hydro` 系统的 `Balloon` 推送，同时若赛事在封榜后仍然推送气球，则支持自定义鼓励气球数，高于设定值则不推送，为所有队伍打造优质赛场体验。
@@ -94,7 +98,7 @@ printers:
 
 ```yaml
 monitor:
-  reportToken: ''
+  reportToken: REPLACE_WITH_RANDOM_REPORT_TOKEN
   exporters:
     - job: node
       port: 9100
@@ -105,11 +109,11 @@ monitor:
     desktop: ''
 ```
 
-`reportToken` 为空时不验证；设置后，HTTP 和 WebSocket 请求都需要携带 `?token=对应值`。
+`reportToken` 首次生成配置时自动设置为随机密钥。HTTP 和 WebSocket 请求都必须携带 `?token=对应值`；空值会禁用机器上报并使 `Checks` 检查失败。升级旧配置时，应先生成一个稳定的随机密钥，并同步写入所有选手机的上报配置。
 
 `monitor.auto.group` 为 `true` 时使用 hostname 开头的连续字母作为 Group；设置为数字 N 时使用 hostname 的前 N 位；设置为字符串时与其他 `monitor.auto` 字段一样使用模板，例如 `[hostname:1]`。未配置的字段不会修改。
 
-Machine Tools 提供选手机本地配置页和赛前展示页。配置页根据服务器地址生成 `/report`、`/probe` 和 `/presentation` 地址，保存座位号、上报 Token 与 Probe 配置。
+Machine Tools 提供选手机本地配置页和赛前展示页。配置页根据服务器地址生成 `/report`、`/probe` 和 `/presentation` 地址，保存座位号、上报 Token 与 Probe 配置。“测试上报”使用独立验证消息，不替换正在运行的 Probe，也不领取待执行命令；此测试需要同步更新服务端。
 
 Linux 镜像需要预装 Machine Tools、Python 3.8+、`python3-websockets`、Python Probe 和对应的 systemd unit。配置程序不会安装这些运行组件。
 
@@ -122,7 +126,7 @@ hydro-machine-tools --presentation  # 赛前展示
 
 上报服务启动后，可在 `http://服务IP:5283/#/monitor` 查看选手机状态。
 
-由于 VLC 自带的服务不支持 CORS ， 因此产品内置了一个代理服务，代理服务会将请求转发到选手机上，您可以通过代理服务访问选手机上的 VLC 服务以实现监控。
+由于 VLC 自带的服务不支持 CORS ， 因此产品内置了一个代理服务，代理会先移除管理员认证头和 Cookie，再将请求转发到选手机上，您可以通过代理服务访问选手机上的 VLC 服务以实现监控。
 
 请注意，默认上报的选手机是不支持查看屏幕的，需要在 UI 上配置选手机信息。点击选手机列表中的选手机的详情按钮，然后在弹出的对话框中即可修改选手机信息。字段含义如下：
 
@@ -183,10 +187,42 @@ scrape_configs:
 
 同时，组别名支持只取名字前缀，如 `[hostname:3]` 会取选手机名称的前三位，如您需要使用 hostname 为 AXX 的选手机 hostname 中的第一位作为组别名，您可以在快速操作中填写 `[hostname:1]`，系统会自动填充对应的选手机信息。
 
-在字段中输入 `del` 可以删除对应字段的信息。
+在字段中输入 `del` 可以删除对应字段的信息。批量编辑须先点击 `Preview changes` 查看影响数量和生成名称；存在重名时不能提交。预览后机器名称、地址等信息发生变化时，需要重新预览。列表以设备 ID 为索引，即使旧数据重名也会保留全部机器。
 
 #### Commands
 `Commands` 页面保留内置命令快捷入口，也可向选中的 v2 选手机或全部在线 v2 选手机下发自定义命令并查看执行结果。仅使用 v1 HTTP 上报的选手机无法接收命令，页面会单独提示其数量。
+
+命令默认只发给在线机器，有效期为 15 分钟，页面提供 1、5、15、60 分钟选项（接口支持 1–1440 分钟）；选择 `Allow reconnect before expiry` 可等待离线 v2 机器重连。有效期限制首次下发时间，已下发的命令由 Probe 的执行超时控制。历史记录分别展示成功、失败、执行超时、过期和取消状态，非零退出码不会显示成功。
+
+`Cancel waiting targets` 仅取消尚未下发的目标，不会中止已经运行的命令。Probe 在执行前持久化命令占位，并保留已确认命令的去重记录；连续重复消息及确认后的再次投递都不会重复执行。请同步更新发布包中的 `machine_tools_probe.py` 并保留其状态文件。
+
+打印与命令历史使用服务端分页，每页默认 50 条（接口最多 100 条），搜索和状态筛选覆盖全部历史。命令列表仅返回摘要，执行输出在打开详情时按每页 10 台机器加载。部分失败、部分等待的命令同时出现在失败和等待筛选中。历史记录会保留，长期存档可使用下述停服备份。
+
+OJ 队伍同步失败后会自动重试，成功后每 5 分钟刷新一次；比赛信息、队伍、气球和打印同步全部成功才更新最近同步成功时间。慢请求不会导致轮询重叠。
+
+#### 赛前检查与备份恢复
+
+管理界面的 `Checks` 页面检查客户端凭据配置、上报认证、OJ 最近同步、打印机在线状态、Probe 版本、座位冲突、展示名单匹配、数据目录可写性和待核对打印任务。`Print test page` 会在确认后提交一张真实测试页，请按打印分组分别检查输出。`Export diagnostics` 导出运行概况及检查结果，不包含配置密钥、命令内容或队伍名单；备份文件包含完整配置，需私密保存。
+
+在原服务端工作目录中执行以下命令。备份和恢复前先停止服务端；运行中的服务会持有数据锁，阻止并发备份或恢复。若使用 JS bundle，将 `./xcpc-tools` 替换为 `node /路径/xcpc-tools-bundle.js`。
+
+```bash
+# 创建备份，已有同名文件不会被覆盖
+./xcpc-tools --backup ./backups/contest.xcpc.gz
+
+# 只检查归档并列出内容，不修改当前数据
+./xcpc-tools --restore ./backups/contest.xcpc.gz
+
+# 确认恢复；当前数据保留在 backups/before-restore-* 下
+./xcpc-tools --restore ./backups/contest.xcpc.gz --confirm-restore
+
+# 恢复过程中退出后，先回退到恢复前的数据，再重新操作
+./xcpc-tools --recover-restore
+```
+
+归档包含 `config.server.yaml`、服务端 `data/` 和配置指定的 Arena 布局（恢复后统一放到 `data/arena-layouts.json`）；不包含操作日志 `data/actions.log` 和打印客户端 `data/print-journal/`。外部 SSH 私钥、客户端配置与 Probe 本地状态需要另外保存。归档拒绝符号链接、越界路径、校验和错误及超过 256 MiB 的解压内容。
+
+恢复后，未完成的代码打印及气球任务暂停等待人工核对，待执行命令取消，客户端在线状态重置。完成现场核对后可按需重新派发。恢复中断会留下标记并阻止服务端启动，运行 `--recover-restore` 回退后再启动；不要直接删除恢复标记或原数据备份。
 
 #### Presentation Teams
 
@@ -240,7 +276,7 @@ Client 端分为打印代码和打印小票两个功能，支持 Windows, Linux,
 
 由于 Windows 限制，在 Windows 下打印代码需要安装 `SumatraPDF` 用于打印 PDF 文件，如您的系统没有安装 `SumatraPDF` ，请根据提示下载便携版并放置于同一目录中；打印气球需将气球打印机设置为共享打印机，后续会自动检测。
 
-Client 端的配置文件为 `config.yaml` ，配置文件介绍如下：
+Client 端的配置文件为 `config.client.yaml` ，配置文件介绍如下：
 
 ```ts
 const clientSchema = Schema.object({
@@ -252,7 +288,7 @@ const clientSchema = Schema.object({
     balloonTemplate: Schema.string().default(balloonTemplateDefault), // 气球小票模板
     printColor: Schema.boolean().default(false), // 是否打印彩色代码
     printPageMax: Schema.number().default(5), // 单次代码打印页数上限
-    printMergeQueue: Schema.number().default(1), // 合并处理的打印任务数量
+    printMergeQueue: Schema.number().default(1), // 合并处理的打印任务数量，整数 1–20
     printers: Schema.array(Schema.union([
         Schema.string(), // 全局打印机
         Schema.object({
@@ -319,3 +355,18 @@ clients:
 模板支持 `{source}`、`{id}`、`{team}`、`{location}`、`{problem}`、`{color}`、`{rgb}`、`{award}` 和 `{time}`。每个 bot 单独记录已推送状态，失败的通道会在后续同步时重试，不会阻止打印客户端领取任务。
 
 首次启动时，系统会检测打印机并提示您填写配置文件，填写好配置文件后即可启动客户端，客户端会自动连接服务端并获取打印信息。
+
+### 开发与验证
+
+使用 Node.js 24、Python 3.11 和项目声明的 Yarn 4.12.0。提交依赖修改时同时提交 `yarn.lock`。
+
+```bash
+corepack enable
+yarn install --immutable
+yarn check                  # ESLint、三个子项目类型检查、Node 与 Python 回归测试
+yarn build
+yarn playwright install chromium
+yarn test:e2e               # 临时服务端、模拟打印客户端与 Probe、桌面及手机页面
+```
+
+端到端测试需要空闲的本地端口 `15983`，在临时目录中创建独立数据，不调用物理打印机。Pull Request 检查和发布前检查都会执行上述验证；真实打印设备和赛事系统仍需在赛前通过 `Checks` 和测试页确认。

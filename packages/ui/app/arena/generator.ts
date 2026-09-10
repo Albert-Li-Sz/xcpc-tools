@@ -52,7 +52,7 @@ export const parseArenaSeatIdTemplate = (source: unknown): ParsedArenaSeatIdTemp
     throw new Error('Seat ID template contains an unsupported token');
   }
   if (!tokens.has('group')) throw new Error('Seat ID template must include [group]');
-  if (!tokens.has('id') && !(tokens.has('row') && tokens.has('col'))) {
+  if (!tokens.has('id') && (!tokens.has('row') || !tokens.has('col'))) {
     throw new Error('Seat ID template must include [id] or both [row] and [col]');
   }
   return parsed;

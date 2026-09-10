@@ -5,9 +5,9 @@ import { Context } from 'cordis';
 import { Registry } from 'prom-client';
 import { BadRequestError, Handler, NotFoundError } from '@hydrooj/framework';
 import { arenaLayouts, config, version } from '../config';
-import { getNotifierStatuses } from '../service/notifier';
 // @ts-ignore
 import StaticFrontend from '../data/static.frontend';
+import { getNotifierStatuses } from '../service/notifier';
 import { normalizePresentationLogo } from '../service/presentation';
 import {
     avatarDirectory,
@@ -209,12 +209,12 @@ const contestOverview = async (ctx: Context) => {
             lastConnectedAt: Number(client.updateAt || 0),
             online: Number(client.updateAt || 0) >= now - CLIENT_ONLINE_WINDOW,
             printers: printers.map((printer) => {
-                const info = printersInfo.find((item) => item.printer === printer);
+                const printerInfo = printersInfo.find((item) => item.printer === printer);
                 return {
                     name: String(printer),
-                    description: String(info?.description || ''),
-                    status: String(info?.status || 'unknown'),
-                    group: String(info?.group || '').trim().toUpperCase(),
+                    description: String(printerInfo?.description || ''),
+                    status: String(printerInfo?.status || 'unknown'),
+                    group: String(printerInfo?.group || '').trim().toUpperCase(),
                 };
             }),
         };

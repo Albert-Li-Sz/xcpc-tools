@@ -7,13 +7,16 @@ import type { BalloonDoc } from '../interface';
 import {
     fs, Logger, mongoId, sleep,
 } from '../utils';
+import { storePrintCode } from '../utils/printFiles';
 import { extractHydroTeams, resolvePublicAssetUrl } from './presentation';
+import { SourceSync } from './sourceSync';
 
 const logger = new Logger('fetcher');
 const fetch = (url: string, type: 'get' | 'post' = 'get') => {
     const endpoint = new URL(url, config.server).toString();
     let req = superagent[type](endpoint)
         .set('Accept', 'application/json')
+        .timeout({ response: 10000, deadline: 30000 })
         .ok(() => true);
     if (config.token) req = req.set('Authorization', config.token);
     return new Proxy(req, {
@@ -53,6 +56,8 @@ class BasicFetcher extends Service implements IBasicFetcher {
     sourceSuccessAt = 0;
     sourceErrorAt = 0;
     sourceError = '';
+    private sourceSync = new SourceSync();
+    private runningCron: Promise<void> | null = null;
     logger = this.ctx.logger('fetcher');
 
     constructor(ctx: Context) {
@@ -76,6 +81,12 @@ class BasicFetcher extends Service implements IBasicFetcher {
     }
 
     async cron() {
+        if (this.runningCron) return this.runningCron;
+        this.runningCron = this.runCron();
+        try { await this.runningCron; } finally { this.runningCron = null; }
+    }
+
+    private async runCron() {
         if (config.type === 'server') return;
         if (!config.token) {
             if (config.username && config.password) await this.getToken(config.username, config.password);
@@ -98,10 +109,8 @@ class BasicFetcher extends Service implements IBasicFetcher {
             }
         }
         this.logger.info('Fetching contest info...');
-        let first = false;
         try {
-            first = await this.contestInfo();
-            if (first) await this.teamInfo();
+            await this.sourceSync.run(this);
             this.sourceSuccessAt = Date.now();
             this.sourceError = '';
         } catch (error) {
@@ -109,8 +118,6 @@ class BasicFetcher extends Service implements IBasicFetcher {
             this.sourceError = error instanceof Error ? error.message : String(error);
             throw error;
         }
-        await this.balloonInfo(first);
-        await this.printInfo(first);
     }
 
     async contestInfo() {
@@ -239,9 +246,9 @@ class DOMjudgeFetcher extends BasicFetcher {
                     ),
                     done: balloon.done,
                     total: totalDict,
-                    printDone: balloon.done ? 1 : 0,
                     shouldPrint,
                 },
+                $max: { printDone: balloon.done ? 1 : 0 },
             }, { upsert: true, returnUpdatedDocs: true });
             if (!updated.done) pending.push(updated);
         }
@@ -341,9 +348,9 @@ class HydroFetcher extends BasicFetcher {
                     ),
                     done: balloon.sent,
                     total: totalDict,
-                    printDone: balloon.sent ? 1 : 0,
                     shouldPrint,
                 },
+                $max: { printDone: balloon.sent ? 1 : 0 },
             }, { upsert: true, returnUpdatedDocs: true });
             if (!updated.done) pending.push(updated);
         }
@@ -368,7 +375,7 @@ class HydroFetcher extends BasicFetcher {
         let cnt = 0;
         while (task) {
             await fs.ensureDir(path.resolve(process.cwd(), 'data/codes'));
-            const res = await this.ctx.db.code.insert({
+            const res = await storePrintCode(this.ctx.db.code, {
                 id: task._id,
                 tid: task.owner,
                 team: `${udoc.school ? `${udoc.school}: ` : ''}${udoc.displayName || udoc.uname}`,
@@ -378,13 +385,7 @@ class HydroFetcher extends BasicFetcher {
                 createAt: new Date(parseInt(task._id.substring(0, 8), 16) * 1000).getTime(),
                 printer: '',
                 done: task.status === 'printed' ? 1 : 0,
-            });
-            try {
-                await fs.writeFile(path.resolve(process.cwd(), 'data/codes', `${task.owner}#${res._id}`), task.content);
-            } catch (error) {
-                await this.ctx.db.code.removeOne({ _id: res._id }, {});
-                throw error;
-            }
+            }, Buffer.from(task.content));
             logger.info(`Team(${task.owner}): ${udoc.displayName || udoc.uname} submitted code. Code Print ID: ${task.owner}#${res._id}`);
             cnt++;
             ({ task, udoc } = await doFetch());

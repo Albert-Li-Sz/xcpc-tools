@@ -20,6 +20,7 @@ class BalloonAdminHandler extends AuthHandler {
         await this.ctx.db.balloon.updateOne({ balloonid: params.balloonid }, {
             $set: {
                 printDone: 0,
+                restoreReview: false,
                 printClient: '',
                 receivedAt: null,
                 printLeaseExpiresAt: null,

@@ -1,15 +1,29 @@
 import { Context } from 'cordis';
-import { BadRequestError } from '@hydrooj/framework';
+import { BadRequestError, NotFoundError } from '@hydrooj/framework';
 import { config } from '../config';
+import {
+    commandSummary, settleWaitingCommands,
+} from '../service/commandTasks';
+import { commandDetail, listCommands } from '../service/history';
 import { executeOnHost } from '../utils';
 import { AuthHandler } from './misc';
 import { dispatchPendingProbeCommands, getActiveProbeMacs } from './monitor';
 
 class CommandsHandler extends AuthHandler {
-    async get() {
-        const commands = await this.ctx.db.command.find({}).sort({ time: -1 }).limit(100);
-        const monitors = await this.ctx.db.monitor.find({});
-        const monitorMap = new Map(monitors.map((m) => [m.mac, m]));
+    async get(params) {
+        await settleWaitingCommands(this.ctx.db.command, 'expired');
+        const monitors = await this.ctx.db.monitor.find({}, {
+            mac: 1, name: 1, hostname: 1, protocol: 1, updateAt: 1,
+        });
+        let history;
+        try {
+            history = params.id ? await commandDetail(this.ctx.db.command, monitors, params) : await listCommands(this.ctx.db.command, monitors, params);
+        } catch (error) { throw new BadRequestError(error.message); }
+        if (params.id) {
+            if (!history) throw new NotFoundError();
+            this.response.body = history;
+            return;
+        }
         const activeProbeMacs = new Set(getActiveProbeMacs());
         const v1OnlyCount = monitors
             .filter((monitor) => (
@@ -25,27 +39,16 @@ class CommandsHandler extends AuthHandler {
                 hostname: monitor.hostname || '',
                 connected: activeProbeMacs.has(monitor.mac),
             }));
-        const commandsWithInfo = commands.map((cmd) => ({
-            _id: cmd._id,
-            command: cmd.command,
-            target: cmd.target || [],
-            executionResult: cmd.executionResult || {},
-            targetInfo: (cmd.target || []).map((mac) => ({
-                mac,
-                hostname: monitorMap.get(mac)?.hostname || mac,
-                name: monitorMap.get(mac)?.name || '',
-            })),
-            status: {
-                total: cmd.target?.length || 0,
-                completed: Object.keys(cmd.executionResult || {}).length,
-                pending: (cmd.target?.length || 0) - Object.keys(cmd.executionResult || {}).length,
-            },
-        }));
-        this.response.body = { commands: commandsWithInfo, targets, v1OnlyCount };
+        this.response.body = { ...history, targets, v1OnlyCount };
     }
 
-    async postCommand({ command, target, broadcast = false, mode = 'heartbeat' }) {
+    async postCommand({
+        command, target, broadcast = false, mode = 'heartbeat', ttlMinutes = 15, delivery = 'online',
+    }) {
         if (!command || typeof command !== 'string') throw new BadRequestError('Command', null, 'Command is required');
+        if (command.length > 64000) throw new BadRequestError('Command exceeds 64000 characters');
+        if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 1440) throw new BadRequestError('Validity must be 1–1440 minutes');
+        if (!['online', 'reconnect'].includes(delivery)) throw new BadRequestError('Invalid delivery mode');
         if (mode !== 'heartbeat' && mode !== 'ssh') throw new BadRequestError('Invalid command mode');
         if (broadcast === true) {
             if (mode === 'heartbeat') {
@@ -53,7 +56,7 @@ class CommandsHandler extends AuthHandler {
                 const knownV2Macs = (await this.ctx.db.monitor.find({}))
                     .filter((monitor) => monitor.protocol === 'v2')
                     .map((monitor) => monitor.mac);
-                target = [...activeProbeMacs, ...knownV2Macs];
+                target = delivery === 'online' ? activeProbeMacs : [...activeProbeMacs, ...knownV2Macs];
             } else {
                 target = (await this.ctx.db.monitor.find({ updateAt: { $gt: Date.now() - 120_000 } })).map((monitor) => monitor.mac);
             }
@@ -66,12 +69,23 @@ class CommandsHandler extends AuthHandler {
             throw new BadRequestError('Invalid MAC address');
         }
         if (mode === 'heartbeat') {
+            const monitors = await this.ctx.db.monitor.find({});
+            const active = new Set(getActiveProbeMacs());
+            const supported = new Set(monitors.filter((m) => m.protocol === 'v2' || active.has(m.mac)).map((m) => m.mac));
+            if (target.some((mac) => !supported.has(mac))) throw new BadRequestError('Unknown v2 machine');
+            if (delivery === 'online' && target.some((mac) => !active.has(mac))) throw new BadRequestError('Some selected machines are offline');
             const res = await this.ctx.db.command.insert({
                 command,
                 time: Date.now(),
+                expiresAt: Date.now() + ttlMinutes * 60000,
+                dispatched: [],
+                results: {},
                 target,
                 pending: target,
                 executionResult: {},
+                summary: commandSummary({
+                    target, pending: target, results: {}, executionResult: {},
+                } as any),
             });
             await dispatchPendingProbeCommands(target);
             this.response.body = { id: res._id };
@@ -80,7 +94,16 @@ class CommandsHandler extends AuthHandler {
         }
     }
 
+    async postCancel({ command }) {
+        if (typeof command !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(command)) throw new BadRequestError('Command ID is required');
+        await settleWaitingCommands(this.ctx.db.command, 'cancelled', command);
+        this.response.body = { success: true };
+    }
+
     async postRemove({ command }) {
+        if (typeof command !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(command)) throw new BadRequestError('Command ID is required');
+        const task = await this.ctx.db.command.findOne({ _id: command });
+        if (task?.pending?.length) throw new BadRequestError('Cancel waiting targets and wait for running commands before removing history');
         await this.ctx.db.command.deleteOne({ _id: command }, {});
         this.response.body = { success: true };
     }

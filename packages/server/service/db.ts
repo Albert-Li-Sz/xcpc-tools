@@ -2,9 +2,10 @@ import path from 'node:path';
 import { Context, Service } from 'cordis';
 import Datastore from 'nedb-promises';
 import {
-    BalloonDoc, ClientDoc, CommandTask, MonitorDoc, PrintCodeDoc, TeamDoc,
+    BalloonDoc, ClientDoc, CommandTask, MonitorDoc, PrintCodeDoc, PrintRequestDoc, TeamDoc,
 } from '../interface';
 import { fs } from '../utils';
+import { initializeCommandSummaries } from './history';
 
 export interface Collections {
     code: PrintCodeDoc;
@@ -13,6 +14,7 @@ export interface Collections {
     balloon: BalloonDoc;
     teams: TeamDoc;
     command: CommandTask;
+    printRequest: PrintRequestDoc;
 }
 
 declare module 'cordis' {
@@ -41,7 +43,7 @@ export default class DBService extends Service {
 
     async [Service.init]() {
         await this.initDatabase('code', [
-            '_id', 'createAt', 'done', 'printer', 'deleted', 'group',
+            '_id', 'createAt', 'done', 'printer', 'deleted', 'group', 'allocationId',
         ]);
         await this.initDatabase('monitor', ['_id', 'mac', 'name', 'group']);
         await this.initDatabase('client', ['id', 'name', 'type', 'group']);
@@ -49,6 +51,8 @@ export default class DBService extends Service {
             'id', 'time', 'problem', 'teamid', 'awards', 'done', 'printDone', 'printClient', 'printLeaseExpiresAt',
         ]);
         await this.initDatabase('command', ['_id', 'command', 'target', 'pending', 'time', 'executionResult']);
+        await initializeCommandSummaries(this.db.command);
         await this.initDatabase('teams', ['id']);
+        await this.initDatabase('printRequest', ['_id']);
     }
 }

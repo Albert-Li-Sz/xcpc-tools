@@ -35,6 +35,7 @@ export async function openSshShell(options: OpenShellOptions): Promise<Interacti
     let exitSignal: string | null | undefined;
     let fingerprint = '';
     let fingerprintError: Error | null = null;
+    const abort = () => client.destroy();
     const finish = () => {
         if (closed) return;
         closed = true;
@@ -42,7 +43,6 @@ export async function openSshShell(options: OpenShellOptions): Promise<Interacti
         options.signal?.removeEventListener('abort', abort);
         if (opened) options.onClose(exitCode, exitSignal);
     };
-    const abort = () => client.destroy();
     options.signal?.addEventListener('abort', abort, { once: true });
 
     try {

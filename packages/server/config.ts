@@ -66,7 +66,7 @@ username:
 password: 
 monitor:
   timeSync: false
-  reportToken: '' # optional token for both /report and /probe
+  reportToken: ${randomstring(32)} # required token for both /report and /probe
   exporters:
     - job: node
       port: 9100
@@ -97,7 +97,7 @@ monitor:
             },
             balloonTemplate: balloonTemplateDefault,
         });
-        fs.writeFileSync(configPath, isClient ? clientConfigDefault : serverConfigDefault);
+        fs.writeFileSync(configPath, isClient ? clientConfigDefault : serverConfigDefault, { mode: 0o600 });
         logger.error('Config file generated, please fill in the config.yaml');
         resolve();
     })());
@@ -133,7 +133,7 @@ const webhookClientSchema = Schema.object({
 
 const monitorSchema = Schema.object({
     timeSync: Schema.boolean().default(false),
-    reportToken: Schema.string().default('').description('Optional query token shared by HTTP and WebSocket machine reports'),
+    reportToken: Schema.string().default('').description('Required query token shared by HTTP and WebSocket machine reports; empty disables reporting'),
     exporters: Schema.array(Schema.object({
         job: Schema.string().required(),
         port: Schema.number().required(),
@@ -147,12 +147,16 @@ const monitorSchema = Schema.object({
         ]).default(''),
         camera: Schema.string().default(''),
         desktop: Schema.string().default(''),
-    }).default({ name: '', group: '', camera: '', desktop: '' }),
+    }).default({
+        name: '', group: '', camera: '', desktop: '',
+    }),
 }).default({
     timeSync: false,
     reportToken: '',
     exporters: [{ job: 'node', port: 9100 }],
-    auto: { name: '', group: '', camera: '', desktop: '' },
+    auto: {
+        name: '', group: '', camera: '', desktop: '',
+    },
 });
 
 const serverSchema = Schema.intersect([
@@ -202,7 +206,7 @@ const clientSchema = Schema.object({
     balloonTemplate: Schema.string().default(balloonTemplateDefault),
     printColor: Schema.boolean().default(false),
     printPageMax: Schema.number().default(5),
-    printMergeQueue: Schema.number().default(1),
+    printMergeQueue: Schema.number().min(1).max(20).step(1).default(1),
     printers: Schema.array(Schema.union([
         Schema.string(),
         Schema.object({

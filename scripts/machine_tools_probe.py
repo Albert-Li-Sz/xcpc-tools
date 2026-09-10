@@ -357,6 +357,7 @@ def load_state(path):
         state = {"running": {}, "outbox": {}}
     state.setdefault("running", {})
     state.setdefault("outbox", {})
+    state.setdefault("completed", {})
     for command_id, running in list(state["running"].items()):
         state["outbox"][command_id] = {
             "type": "result",
@@ -382,6 +383,11 @@ async def save_state(path, state):
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 class OutputLimitExceeded(Exception):
@@ -436,12 +442,14 @@ async def run_command(command):
         asyncio.create_task(read_limited(process.stderr, stderr)),
     ]
     error_message = ""
+    timed_out = False
     try:
         await asyncio.wait_for(
             asyncio.gather(process.wait(), *tasks),
             timeout=COMMAND_TIMEOUT,
         )
     except asyncio.TimeoutError:
+        timed_out = True
         error_message = "Command timed out after {} seconds".format(COMMAND_TIMEOUT)
         await stop_process(process)
     except OutputLimitExceeded as error:
@@ -459,11 +467,12 @@ async def run_command(command):
         if stderr:
             stderr.extend(b"\n")
         stderr.extend(error_message.encode("utf-8"))
-        return -1, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
+        return 124 if timed_out else -1, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"), timed_out
     return (
         process.returncode if process.returncode is not None else -1,
         stdout.decode("utf-8", "replace"),
         stderr.decode("utf-8", "replace"),
+        False,
     )
 
 
@@ -486,18 +495,15 @@ async def send_json(payload):
 
 async def execute_command(message, state, state_path):
     command_id = message["id"]
-    state["running"][command_id] = {
-        "command": message["command"],
-    }
-    await save_state(state_path, state)
     try:
-        exit_code, stdout, stderr = await run_command(message["command"])
+        exit_code, stdout, stderr, timed_out = await run_command(message["command"])
     except Exception as error:
-        exit_code, stdout, stderr = -1, "", str(error)
+        exit_code, stdout, stderr, timed_out = -1, "", str(error), False
     result = {
         "type": "result",
         "id": command_id,
         "exitCode": exit_code,
+        "timedOut": timed_out,
         "stdout": stdout,
         "stderr": stderr,
     }
@@ -532,6 +538,7 @@ async def report_loop(config, state):
 
 async def connect(config, state, state_path):
     global active_socket, active_send_lock
+    state.setdefault("completed", {})
     endpoint = urllib.parse.urlsplit(config["probeUrl"])
     query = dict(urllib.parse.parse_qsl(endpoint.query, keep_blank_values=True))
     if config["reportToken"]:
@@ -566,6 +573,8 @@ async def connect(config, state, state_path):
                         await send_json(result)
                     continue
                 if message_type == "result-ack" and message.get("id"):
+                    if message["id"] in state["outbox"]:
+                        state["completed"][message["id"]] = True
                     state["outbox"].pop(message["id"], None)
                     await save_state(state_path, state)
                     continue
@@ -576,6 +585,8 @@ async def connect(config, state, state_path):
                 ):
                     continue
                 command_id = message["id"]
+                if command_id in state["completed"]:
+                    continue
                 if command_id in state["outbox"]:
                     await send_json(state["outbox"][command_id])
                     continue
@@ -585,6 +596,17 @@ async def connect(config, state, state_path):
                     continue
                 if state["running"]:
                     continue
+                if message.get("expiresAt") and time.time() * 1000 >= message["expiresAt"]:
+                    result = {"type": "result", "id": command_id, "exitCode": -1,
+                              "stdout": "", "stderr": "Command expired before execution", "expired": True}
+                    state["outbox"][command_id] = result
+                    await save_state(state_path, state)
+                    await send_json(result)
+                    continue
+                # Reserve synchronously before yielding to the task scheduler. Buffered
+                # duplicate messages must see this entry even before execution starts.
+                state["running"][command_id] = {"command": message["command"]}
+                await save_state(state_path, state)
                 task = asyncio.create_task(execute_command(message, state, state_path))
                 command_tasks.add(task)
                 task.add_done_callback(log_task_failure)

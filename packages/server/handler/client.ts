@@ -1,19 +1,17 @@
 /* eslint-disable no-await-in-loop */
-import path from 'node:path';
 import { Context } from 'cordis';
 import {
     BadRequestError, ForbiddenError, Handler, ValidationError,
 } from '@hydrooj/framework';
 import { config } from '../config';
-import { fs, Logger } from '../utils';
-import { AuthHandler } from './misc';
 import {
-    collectPrinterTargets,
-    resolvePrinterTarget,
-} from './printRouting';
+    allocatePrintRequest, finishPrintTask, releasePrintTask, updatePrintProgress,
+} from '../service/printTasks';
+import { Logger } from '../utils';
+import { AuthHandler } from './misc';
 
 const logger = new Logger('handler/client');
-const CLIENT_PROTOCOL_VERSION = 2;
+const CLIENT_PROTOCOL_VERSION = 4;
 const TASK_LEASE_DURATION = 45_000;
 
 async function refreshClientHeartbeat(ctx: Context, clientId: string, requestIp: string, now = Date.now()) {
@@ -120,57 +118,11 @@ async function reapExpiredBalloonClaims(ctx: Context) {
     );
 }
 
-async function claimPrintTask(ctx: Context, client: any, preferredTargetPrinter: string) {
-    const candidates = await ctx.db.code.find({ printer: '', done: 0, deleted: { $ne: 1 } }).sort({ createAt: 1 });
-    if (!candidates.length) return null;
-    const clientStates = new Map((await ctx.db.client.find({})).map((item: any) => [item.id, item]));
-    clientStates.set(client.id, client);
-    const printerTargets = collectPrinterTargets([...clientStates.values()] as any[]);
-    for (const code of candidates as any[]) {
-        const target = resolvePrinterTarget(
-            printerTargets,
-            clientStates as any,
-            code.group,
-            code.location,
-            preferredTargetPrinter,
-        );
-        if (!target || target.clientId !== client.id) continue;
-        let content: string;
-        try {
-            content = fs.readFileSync(path.resolve(process.cwd(), 'data/codes', `${code.tid}#${code._id}`)).toString('base64');
-        } catch (error) {
-            logger.error(`Unable to read print task ${code.tid}#${code._id}`, error);
-            continue;
-        }
-        const receivedAt = Date.now();
-        const claimed = await ctx.db.code.updateOne(
-            { _id: code._id, printer: '', done: 0, deleted: { $ne: 1 } },
-            {
-                $set: {
-                    printer: client.id,
-                    receivedAt,
-                    targetPrinter: target.printer,
-                },
-            } as any,
-        );
-        if (claimed) {
-            return {
-                ...code,
-                printer: client.id,
-                receivedAt,
-                targetPrinter: target.printer,
-                code: content,
-            };
-        }
-    }
-    return null;
-}
-
 class ClientPrintConnectHandler extends Handler {
     async post(params) {
         const client = await getClient(this.ctx, params.cid, 'printer');
         if (Number(params.protocolVersion || 0) < CLIENT_PROTOCOL_VERSION) {
-            throw new BadRequestError('Printer Client v2 is required');
+            throw new BadRequestError('Printer Client v4 is required; upgrade the print client');
         }
         const ip = this.request.ip.replace('::ffff:', '');
         logger.info(`Client ${client.name}(${ip}) connected.`);
@@ -194,9 +146,13 @@ class ClientPrintConnectHandler extends Handler {
             updateAt: Date.now(),
             ip,
         };
-        const code = await claimPrintTask(this.ctx, currentClient, String(params.preferredTargetPrinter || ''));
+        let allocation;
+        try {
+            allocation = await allocatePrintRequest(this.ctx, currentClient, params.requestId, String(params.preferredTargetPrinter || ''));
+        } catch (error) { throw new BadRequestError(error.message); }
+        const code = allocation.doc;
         if (!code) {
-            this.response.body = { code: 0 };
+            this.response.body = { code: 0, retired: allocation.retired || false };
             return;
         }
         this.response.body = {
@@ -211,60 +167,33 @@ class ClientPrintConnectHandler extends Handler {
 class ClientPrintDoneHandler extends Handler {
     async post(params) {
         const client = await getClient(this.ctx, params.cid, 'printer');
-        const code = await this.ctx.db.code.findOne({ _id: params.tid });
-        if (!code) throw new ValidationError('Code', null, 'Code not found');
-        if (code.printer !== params.cid) throw new BadRequestError('Print task changed');
-        if (code.done) {
+        try {
+            const changed = await finishPrintTask(this.ctx.db.code, params);
+            if (changed) await this.ctx.parallel('print/doneTask', client._id, `${client._id}#${params.printer || 'unknown'}`);
+            await refreshClientHeartbeat(this.ctx, params.cid, this.request.ip);
             this.response.body = { code: 1 };
-            return;
-        }
-        const physicalPrinter = String(params.printer || '').replace(/^"|"$/g, '');
-        if ((code as any).targetPrinter && physicalPrinter !== (code as any).targetPrinter) {
-            throw new BadRequestError('Printer', null, 'Physical printer does not match the assigned route');
-        }
-        const completed = await this.ctx.db.code.updateOne(
-            {
-                _id: params.tid,
-                printer: params.cid,
-                done: 0,
-            },
-            {
-                $set: {
-                    done: 1,
-                    doneAt: Date.now(),
-                },
-            } as any,
-        );
-        if (!completed) throw new BadRequestError('Print task changed');
-        await this.ctx.parallel('print/doneTask', client._id, `${client._id}#${physicalPrinter || 'unknown'}`);
-        logger.info(`Client ${client.name} completed local print task ${code.tid}#${code._id}.`);
-        this.response.body = { code: 1 };
+        } catch (error) { throw new BadRequestError(error.message); }
     }
 }
 
 class ClientPrintReleaseHandler extends Handler {
     async post(params) {
-        const client = await getClient(this.ctx, params.cid, 'printer');
-        const code = await this.ctx.db.code.findOne({ _id: params.tid });
-        if (!code) throw new ValidationError('Code', null, 'Code not found');
-        if (code.printer !== params.cid || code.done) throw new BadRequestError('Print task changed');
-        const released = await this.ctx.db.code.updateOne(
-            {
-                _id: params.tid,
-                printer: params.cid,
-                done: 0,
-            },
-            {
-                $set: {
-                    printer: '',
-                    receivedAt: null,
-                    targetPrinter: '',
-                },
-            } as any,
-        );
-        if (!released) throw new BadRequestError('Print task changed');
-        logger.warn(`Client ${client.name} released print task ${code.tid}#${code._id}: ${String(params.error || 'local print failed')}`);
-        this.response.body = { code: 1 };
+        await getClient(this.ctx, params.cid, 'printer');
+        try {
+            await releasePrintTask(this.ctx.db.code, params);
+            this.response.body = { code: 1 };
+        } catch (error) { throw new BadRequestError(error.message); }
+    }
+}
+
+class ClientPrintProgressHandler extends Handler {
+    async post(params) {
+        await getClient(this.ctx, params.cid, 'printer');
+        try {
+            await updatePrintProgress(this.ctx.db.code, params);
+            await refreshClientHeartbeat(this.ctx, params.cid, this.request.ip);
+            this.response.body = { code: 1 };
+        } catch (error) { throw new BadRequestError(error.message); }
     }
 }
 
@@ -277,6 +206,7 @@ class ClientBallloonConnectHandler extends Handler {
         const [candidate] = await this.ctx.db.balloon.find({
             printDone: 0,
             shouldPrint: true,
+            restoreReview: { $ne: true },
             $or: [{ printClient: '' }, { printClient: { $exists: false } }],
         }).sort({ time: 1 }).limit(1);
         let balloon = null;
@@ -369,6 +299,7 @@ export async function apply(ctx: Context) {
     ctx.Route('client_control', '/client', ClientControlHandler);
     ctx.Route('client_print_fetch', '/client/:cid/print', ClientPrintConnectHandler);
     ctx.Route('client_print_done', '/client/:cid/doneprint/:tid', ClientPrintDoneHandler);
+    ctx.Route('client_print_progress', '/client/:cid/progressprint/:tid', ClientPrintProgressHandler);
     ctx.Route('client_print_release', '/client/:cid/releaseprint/:tid', ClientPrintReleaseHandler);
     ctx.Route('client_balloon_fetch', '/client/:cid/balloon', ClientBallloonConnectHandler);
     ctx.Route('client_balloon_done', '/client/:cid/doneballoon/:bid', ClientBalloonDoneHandler);

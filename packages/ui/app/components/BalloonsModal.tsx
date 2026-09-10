@@ -1,4 +1,6 @@
-import { Button, ColorInput, Fieldset, Modal, Text } from '@mantine/core';
+import {
+  Button, ColorInput, Fieldset, Modal, Text,
+} from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconPalette } from '@tabler/icons-react';
 import React, { useState } from 'react';

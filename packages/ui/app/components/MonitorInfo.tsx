@@ -338,20 +338,19 @@ export function MonitorInfoButton({ monitor, action }) {
           <IconDeviceDesktop />
         </ActionIcon>
       )}
-      <span
-        title={window.Context.sshEnabled ? 'WebSSH' : 'WebSSH is disabled in server config'}
-        style={{ display: 'inline-flex' }}
-      >
-        <ActionIcon
-          variant="transparent"
-          color="blue"
-          aria-label="WebSSH"
-          disabled={!window.Context.sshEnabled}
-          onClick={() => action(monitor, 'terminal')}
-        >
-          <IconTerminal2 />
-        </ActionIcon>
-      </span>
+      <Tooltip label={window.Context.sshEnabled ? 'WebSSH' : 'WebSSH is disabled in server config'}>
+        <span style={{ display: 'inline-flex' }}>
+          <ActionIcon
+            variant="transparent"
+            color="blue"
+            aria-label="WebSSH"
+            disabled={!window.Context.sshEnabled}
+            onClick={() => action(monitor, 'terminal')}
+          >
+            <IconTerminal2 />
+          </ActionIcon>
+        </span>
+      </Tooltip>
       <ActionIcon title="Delete" variant="transparent" color="red" aria-label='Delete' onClick={confirmDelete}>
         <IconX />
       </ActionIcon>

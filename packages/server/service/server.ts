@@ -6,6 +6,7 @@ import {
 import { errorMessage } from '@hydrooj/utils';
 import { config } from '../config';
 import { randomstring } from '../utils';
+import { stripProxyCredentials } from '../utils/security';
 export * from '@hydrooj/framework/decorators';
 
 export async function apply(pluginContext: Context) {
@@ -32,7 +33,9 @@ export async function apply(pluginContext: Context) {
                 logs: false,
                 rewrite: () => redirectUrl.pathname,
                 events: {
+                    proxyReq: stripProxyCredentials,
                     proxyRes: (proxyRes, req, res) => {
+                        delete proxyRes.headers['set-cookie'];
                         res.setHeader('Access-Control-Allow-Origin', '*');
                         res.setHeader('Access-Control-Allow-Headers', corsAllowHeaders);
                         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');

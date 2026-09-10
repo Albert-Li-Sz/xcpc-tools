@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export type ClientService = 'print' | 'balloon';
-export type ClientTaskStage = 'received' | 'converting' | 'printing' | 'confirming' | 'done' | 'failed';
+export type ClientTaskStage = 'received' | 'converting' | 'printing' | 'confirming' | 'done' | 'failed' | 'needs_review';
 
 interface ClientTaskStatus {
     id: string;
@@ -43,9 +43,10 @@ const sanitizedServer = (server: unknown) => {
     }
 };
 
-const sanitizedError = (error: unknown) => {
+export const sanitizedError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error ?? '');
     return message
+        .replace(/(https?:\/\/)[^/@\s]+@/gi, '$1[redacted]@')
         .replace(/(^|\/)client\/[^/\s]+\//g, '$1client/[redacted]/')
         .replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi, '$1[redacted]')
         .slice(0, 500);

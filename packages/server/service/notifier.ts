@@ -236,6 +236,7 @@ export async function apply(ctx: Context) {
     const deliveries = new Map<string, Promise<void>>();
     const deliver = async (eventBalloon: BalloonDoc, source: BalloonNotificationSource) => {
         const balloon = await ctx.db.balloon.findOne({ balloonid: eventBalloon.balloonid }) || eventBalloon;
+        if ((balloon as any).restoreReview && !source.force && !source.retryFailed) return;
         if (balloon.notifierFailed && !source.force && !source.retryFailed) return;
 
         const notifierSent = source.force ? {} : { ...(balloon.notifierSent || {}) };

@@ -2,6 +2,7 @@ import {
   Alert, Card, Center, Group, Pagination, Select, Skeleton,
   Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
+import { useDebouncedValue } from '@mantine/hooks';
 import { IconAlertCircle, IconSearch } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import React from 'react';
@@ -11,40 +12,26 @@ import { PrintTasksTable } from '../components/PrintTasksTable';
 import { printQuery } from '../queries';
 
 export default function Print() {
-  const query = useQuery({
-    ...printQuery(),
-    refetchInterval: 15000,
-  });
-
   const [colorCode, setColorCode] = React.useState(false);
   const [search, setSearch] = React.useState('');
   const [status, setStatus] = React.useState('all');
   const [locationGroup, setLocationGroup] = React.useState('all');
   const [page, setPage] = React.useState(1);
-  const filteredCodes = React.useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return (query.data?.codes || []).filter((task) => {
-      const taskStatus = task.done ? 'done' : task.printer ? 'sent' : 'new';
-      const matchesStatus = status === 'all' || status === taskStatus;
-      const taskGroup = task.group || task.matchedGroup;
-      const matchesGroup = locationGroup === 'all' || taskGroup === locationGroup;
-      const haystack = [
-        task._id, task.team, task.location, taskGroup, task.filename, task.lang,
-        task.targetClient, task.targetClientName, task.targetPrinter,
-      ].join(' ').toLowerCase();
-      return matchesStatus && matchesGroup && (!needle || haystack.includes(needle));
-    });
-  }, [locationGroup, query.data?.codes, search, status]);
+  const [debouncedSearch] = useDebouncedValue(search, 250);
+  const query = useQuery({
+    ...printQuery({
+      page, search: debouncedSearch, status, group: locationGroup,
+    }),
+    refetchInterval: 15000,
+  });
+  const visibleCodes = query.data?.codes || [];
   const printerGroups = React.useMemo(() => Array.from(new Set(
     (query.data?.routing?.routes || []).map((route) => route.group).filter(Boolean),
   )).sort(), [query.data?.routing?.routes]);
-  const locationGroups = React.useMemo(() => Array.from(new Set([
-    ...(query.data?.codes || []).map((task) => task.group || task.matchedGroup),
-    ...printerGroups,
-  ].filter(Boolean))).sort(), [printerGroups, query.data?.codes]);
-  const pageCount = Math.max(1, Math.ceil(filteredCodes.length / 50));
-  const currentPage = Math.min(page, pageCount);
-  const visibleCodes = filteredCodes.slice((currentPage - 1) * 50, currentPage * 50);
+  const locationGroups: string[] = query.data?.groups || [];
+  const total = query.data?.total || 0;
+  const pageCount = Math.max(1, Math.ceil(total / 50));
+  const currentPage = query.data?.page || page;
   return (
     <>
       <PageHeader
@@ -102,6 +89,8 @@ export default function Print() {
                   { value: 'all', label: 'All statuses' },
                   { value: 'new', label: 'New' },
                   { value: 'sent', label: 'Sent' },
+                  { value: 'needs_review', label: 'Needs review' },
+                  { value: 'failed', label: 'Failed' },
                   { value: 'done', label: 'Done' },
                 ]}
                 allowDeselect={false}
@@ -128,16 +117,16 @@ export default function Print() {
               <Skeleton h={44} />
               <Skeleton h={44} />
             </Stack>
-          ) : (!filteredCodes.length ? (
+          ) : (!visibleCodes.length ? (
             <Center mt="md">
-              <Text c="dimmed">{query.data?.codes?.length ? 'No tasks match the filters' : 'No print tasks'}</Text>
+              <Text c="dimmed">{search || status !== 'all' || locationGroup !== 'all' ? 'No tasks match the filters' : 'No print tasks'}</Text>
             </Center>
           ) : (
             <Stack gap="md">
               <PrintTasksTable colorCode={colorCode} codes={visibleCodes} refresh={query.refetch} />
               {pageCount > 1 && (
                 <Group justify="space-between" wrap="wrap">
-                  <Text size="xs" c="dimmed">{filteredCodes.length} tasks, 50 per page</Text>
+                  <Text size="xs" c="dimmed">{total} tasks, 50 per page</Text>
                   <Pagination value={currentPage} total={pageCount} onChange={setPage} size="sm" />
                 </Group>
               )}

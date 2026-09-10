@@ -1,0 +1,13 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "composite": false,
+        "incremental": false,
+        "noEmit": true,
+        "skipLibCheck": true,
+        "jsx": "react-jsx",
+        "lib": ["ES2020", "DOM", "DOM.Iterable"],
+        "types": ["node", "react", "react-dom"]
+    },
+    "include": ["app/**/*.ts", "app/**/*.tsx", "globals.d.ts"]
+}

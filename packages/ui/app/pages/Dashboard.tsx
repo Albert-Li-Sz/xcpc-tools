@@ -125,7 +125,9 @@ export default function Dashboard() {
     : null;
   const moduleSummaries = [
     {
-      title: 'Print', color: 'teal', Icon: IconPrinter,
+      title: 'Print',
+      color: 'teal',
+      Icon: IconPrinter,
       metrics: [
         { label: 'New', value: print.new || 0 },
         { label: 'Sent', value: print.sent || 0 },
@@ -133,7 +135,9 @@ export default function Dashboard() {
       ],
     },
     {
-      title: 'Balloon', color: 'orange', Icon: IconBalloon,
+      title: 'Balloon',
+      color: 'orange',
+      Icon: IconBalloon,
       metrics: [
         { label: 'New', value: balloon.new || 0 },
         { label: 'Sent', value: balloon.sent || 0 },
@@ -141,7 +145,9 @@ export default function Dashboard() {
       ],
     },
     {
-      title: 'Machines', color: 'cyan', Icon: IconDeviceHeartMonitor,
+      title: 'Machines',
+      color: 'cyan',
+      Icon: IconDeviceHeartMonitor,
       metrics: [
         { label: 'Online', value: machines.online || 0 },
         { label: 'Offline', value: machines.offline || 0 },
@@ -256,7 +262,7 @@ export default function Dashboard() {
             <Group justify="space-between" wrap="nowrap">
               <Group gap="sm" wrap="nowrap" miw={0}>
                 <img src={hydroLogo} width={32} height={32} alt="Hydro" />
-                <Text fw={700} lh={1.2} textWrap="nowrap">XCPC Tools</Text>
+                <Text fw={700} lh={1.2} style={{ whiteSpace: 'nowrap' }}>XCPC Tools</Text>
                 {overview.data?.contest?.name && (
                   <Text size="sm" c="dimmed" truncate>
                     {overview.data.contest.name}
@@ -277,7 +283,9 @@ export default function Dashboard() {
             withBorder
             radius="md"
             p="md"
-            style={{ display: 'flex', minHeight: 0, flexDirection: 'column', overflow: 'hidden' }}
+            style={{
+              display: 'flex', minHeight: 0, flexDirection: 'column', overflow: 'hidden',
+            }}
           >
             {monitor.isError && !monitor.data ? (
               <Alert color="red" title="Unable to load computers" icon={<IconAlertCircle />}>

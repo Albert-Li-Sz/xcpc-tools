@@ -577,7 +577,9 @@ export const ArenaView = React.memo(({ monitors, isLoading, openMonitorInfo }: A
   return (
     <Box
       pos="relative"
-      style={{ display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column' }}
+      style={{
+        display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column',
+      }}
     >
       <LoadingOverlay
         visible={Boolean(isLoading)}

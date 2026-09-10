@@ -1,7 +1,8 @@
 import {
-  Alert, Button, Card, Center, Group, MultiSelect, SegmentedControl, Select,
+  Alert, Button, Card, Center, Group, MultiSelect, Pagination, SegmentedControl, Select,
   Skeleton, Stack, Tabs, Text, Textarea, TextInput,
 } from '@mantine/core';
+import { useDebouncedValue } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconSearch } from '@tabler/icons-react';
@@ -15,14 +16,18 @@ import { commandsQuery } from '../queries';
 export default function Commands() {
   const [command, setCommand] = React.useState('');
   const [target, setTarget] = React.useState<string[]>([]);
+  const [ttlMinutes, setTtlMinutes] = React.useState('15');
+  const [delivery, setDelivery] = React.useState('online');
   const [targetMode, setTargetMode] = React.useState('all');
   const [activeTab, setActiveTab] = React.useState('history');
   const [submitting, setSubmitting] = React.useState(false);
   const [historySearch, setHistorySearch] = React.useState('');
   const [historyStatus, setHistoryStatus] = React.useState('all');
+  const [page, setPage] = React.useState(1);
+  const [debouncedSearch] = useDebouncedValue(historySearch, 250);
 
   const query = useQuery({
-    ...commandsQuery(),
+    ...commandsQuery({ page, search: debouncedSearch, status: historyStatus }),
     refetchInterval: 10000,
   });
 
@@ -34,6 +39,8 @@ export default function Commands() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           operation: op,
+          ttlMinutes: Number(ttlMinutes),
+          delivery,
           command: withCommand ? command : undefined,
           ...(withCommand && targetMode === 'all' ? { broadcast: true } : { target }),
         }),
@@ -50,6 +57,7 @@ export default function Commands() {
         setTarget([]);
       }
       query.refetch();
+      setPage(1);
       setActiveTab('history');
     } catch (e) {
       console.error(e);
@@ -71,25 +79,17 @@ export default function Commands() {
     [query.data?.targets],
   );
   const offlineTargetCount = allTargetCount - connectedTargetCount;
-  const filteredCommands = React.useMemo(() => {
-    const needle = historySearch.trim().toLowerCase();
-    return (query.data?.commands || []).filter((item) => {
-      const itemStatus = item.status.total === 0 ? 'no-target' : item.status.pending > 0 ? 'pending' : 'completed';
-      const matchesStatus = historyStatus === 'all' || historyStatus === itemStatus;
-      const haystack = [item._id, item.command, ...(item.targetInfo || []).map((targetInfo) => (
-        targetInfo.name || targetInfo.hostname || targetInfo.mac
-      ))].join(' ').toLowerCase();
-      return matchesStatus && (!needle || haystack.includes(needle));
-    });
-  }, [historySearch, historyStatus, query.data?.commands]);
+  const filteredCommands = query.data?.commands || [];
+  const total = query.data?.total || 0;
+  const pageCount = Math.max(1, Math.ceil(total / 50));
   const confirmCommand = () => {
     modals.openConfirmModal({
-      title: broadcast ? 'Send command to all v2 computers' : 'Send command',
+      title: broadcast ? 'Send command to v2 computers' : 'Send command',
       children: (
         <Stack gap="xs">
           <Text size="sm">
             {broadcast
-              ? `This command will be sent to all ${allTargetCount} v2 computers. ${connectedTargetCount} online computers will receive it immediately${offlineTargetCount ? `; ${offlineTargetCount} offline computers will receive it after reconnecting` : ''}.`
+              ? `This command targets ${delivery === 'online' ? connectedTargetCount : allTargetCount} v2 computers. It must start within ${ttlMinutes} minutes. ${delivery === 'reconnect' ? 'Offline targets receive it if they reconnect before expiry.' : 'Only currently connected machines are included.'}`
               : `This command will be sent to ${targetCount} selected target${targetCount === 1 ? '' : 's'}.`}
           </Text>
           {broadcast && v1OnlyCount > 0 && (
@@ -129,7 +129,7 @@ export default function Commands() {
           <Tabs.List>
             <Tabs.Tab value="history">
               History
-              {query.data?.commands?.length > 0 && ` (${query.data.commands.length})`}
+              {total > 0 && ` (${total})`}
             </Tabs.Tab>
             <Tabs.Tab value="send">Send Command</Tabs.Tab>
           </Tabs.List>
@@ -153,6 +153,14 @@ export default function Commands() {
               value={command}
               onChange={(ev) => setCommand(ev.target.value)}
             />
+            <Group mb="md" align="flex-start">
+              <Select label="Start within" value={ttlMinutes} onChange={(value) => setTtlMinutes(value || '15')}
+                data={[{ value: '1', label: '1 minute' }, { value: '5', label: '5 minutes' }, { value: '15', label: '15 minutes' }, { value: '60', label: '1 hour' }]}
+                allowDeselect={false} />
+              <Select label="Delivery" value={delivery} onChange={(value) => setDelivery(value || 'online')}
+                data={[{ value: 'online', label: 'Online machines only' }, { value: 'reconnect', label: 'Allow reconnect before expiry' }]}
+                allowDeselect={false} />
+            </Group>
             <SegmentedControl
               value={targetMode}
               onChange={setTargetMode}
@@ -175,9 +183,9 @@ export default function Commands() {
                 description={`${targetCount} selected`}
               />
             ) : (
-              <Alert my="md" color="red" title={`All ${allTargetCount} v2 machines`}>
+              <Alert my="md" color="red" title={`${delivery === 'online' ? connectedTargetCount : allTargetCount} v2 machines`}>
                 {connectedTargetCount} online machines will receive the command immediately.
-                {offlineTargetCount > 0 && ` ${offlineTargetCount} offline machines will receive it after reconnecting.`}
+                {delivery === 'reconnect' && offlineTargetCount > 0 && ` ${offlineTargetCount} offline machines can receive it before the ${ttlMinutes}-minute deadline.`}
               </Alert>
             )}
             {v1OnlyCount > 0 && (
@@ -189,7 +197,7 @@ export default function Commands() {
               <Button
                 size="sm"
                 loading={submitting}
-                disabled={!command.trim() || (broadcast ? !allTargetCount : !targetCount)}
+                disabled={!command.trim() || (broadcast ? !(delivery === 'online' ? connectedTargetCount : allTargetCount) : !targetCount)}
                 onClick={confirmCommand}
               >
                 Send command
@@ -205,18 +213,20 @@ export default function Commands() {
                 placeholder="Search history"
                 leftSection={<IconSearch size={16} />}
                 value={historySearch}
-                onChange={(event) => setHistorySearch(event.currentTarget.value)}
+                onChange={(event) => { setHistorySearch(event.currentTarget.value); setPage(1); }}
               />
               <Select
                 w={{ base: '100%', xs: 'auto' }}
                 aria-label="Filter command history by status"
                 value={historyStatus}
-                onChange={(value) => setHistoryStatus(value || 'all')}
+                onChange={(value) => { setHistoryStatus(value || 'all'); setPage(1); }}
                 data={[
                   { value: 'all', label: 'All statuses' },
                   { value: 'pending', label: 'Pending' },
                   { value: 'completed', label: 'Completed' },
-                  { value: 'no-target', label: 'No target' },
+                  { value: 'failed', label: 'Failed / timed out' },
+                  { value: 'expired', label: 'Expired' },
+                  { value: 'cancelled', label: 'Cancelled' },
                 ]}
                 allowDeselect={false}
               />
@@ -230,11 +240,17 @@ export default function Commands() {
             ) : !filteredCommands.length ? (
               <Center py="xl">
                 <Text c="dimmed">
-                  {query.data?.commands?.length ? 'No commands match the filters' : 'No command history'}
+                  {historySearch || historyStatus !== 'all' ? 'No commands match the filters' : 'No command history'}
                 </Text>
               </Center>
             ) : (
-              <CommandHistoryTable commands={filteredCommands} />
+              <Stack gap="md">
+                <CommandHistoryTable commands={filteredCommands} />
+                {pageCount > 1 && <Group justify="space-between">
+                  <Text size="xs" c="dimmed">{total} commands, 50 per page</Text>
+                  <Pagination value={query.data?.page || page} total={pageCount} onChange={setPage} size="sm" />
+                </Group>}
+              </Stack>
             )}
           </Tabs.Panel>
         </Tabs>

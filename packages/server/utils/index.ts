@@ -25,7 +25,8 @@ export function StaticHTML(context, randomHash) {
         .replace(/\u2028/g, '\\u2028')
         .replace(/\u2029/g, '\\u2029');
     // eslint-disable-next-line max-len
-    return `<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>@Hydro/XCPC-TOOLS</title></head><body><div id="root"></div><script>window.Context=${safeContext}</script><script src="/main.js?${randomHash}"></script></body></html>`;
+    const favicon = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="7" fill="%232281e0"/%3E%3Cpath d="m10 9 12 14M22 9 10 23" stroke="white" stroke-width="4"/%3E%3C/svg%3E';
+    return `<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href='${favicon}'><title>@Hydro/XCPC-TOOLS</title></head><body><div id="root"></div><script>window.Context=${safeContext}</script><script src="/main.js?${randomHash}"></script></body></html>`;
 }
 
 export function decodeBinary(file: string | Buffer, name: string) {

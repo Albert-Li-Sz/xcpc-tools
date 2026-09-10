@@ -5,7 +5,12 @@ import {
     BadRequestError, ConnectionHandler, ForbiddenError, Handler,
 } from '@hydrooj/framework';
 import { config } from '../config';
+import {
+    claimNextCommand, commandDeadline, commandResult, saveCommandResult,
+} from '../service/commandTasks';
+import { applyMonitorEdit, serializeMonitorEdit } from '../service/monitorEditing';
 import { Logger } from '../utils';
+import { validReportToken } from '../utils/security';
 import { AuthHandler } from './misc';
 
 const logger = new Logger('monitor');
@@ -28,17 +33,17 @@ class MonitorAdminHandler extends AuthHandler {
     async get(params) {
         const { nogroup } = params;
         const monitors = await this.ctx.db.monitor.find({}).sort({ name: 1 });
-        const monitorDict = {};
-        const groups = {};
+        const monitorDict = Object.create(null);
+        const groups = Object.create(null);
         groups['#ErrMachine'] = [];
         for (const monitor of monitors) {
-            monitorDict[monitor.name || monitor._id] = monitor;
+            monitorDict[monitor._id] = monitor;
             if (!nogroup && monitor.group) {
                 groups[monitor.group] ||= [];
-                groups[monitor.group].push(monitor.name || monitor._id);
+                groups[monitor.group].push(monitor._id);
             }
             if (monitor.updateAt < new Date().getTime() - 120 * 1000) {
-                groups['#ErrMachine'].push(monitor.name || monitor._id);
+                groups['#ErrMachine'].push(monitor._id);
             }
         }
         this.response.body = { monitors: monitorDict };
@@ -46,23 +51,8 @@ class MonitorAdminHandler extends AuthHandler {
     }
 
     async postUpdate(params) {
-        const {
-            _id, name, group, camera, desktop,
-        } = params;
-        if (!_id) throw new BadRequestError();
-        const m = await this.ctx.db.monitor.findOne({ _id });
-        if (!m) throw new BadRequestError();
-        const samem = await this.ctx.db.monitor.findOne({ name });
-        if (samem && samem._id !== _id) throw new BadRequestError('Name already exists');
-        this.ctx.db.monitor.update({ _id }, {
-            $set: {
-                ...name && { name },
-                ...group && { group },
-                ...camera && { camera },
-                ...desktop && { desktop },
-            },
-        });
-        this.response.body = { success: true };
+        if (typeof params._id !== 'string' || !params._id) throw new BadRequestError();
+        try { this.response.body = await applyMonitorEdit(this.ctx.db.monitor, params); } catch (error) { throw new BadRequestError(error.message); }
     }
 
     async postDelete(params) {
@@ -70,45 +60,21 @@ class MonitorAdminHandler extends AuthHandler {
         if (!_id) throw new BadRequestError();
         const m = await this.ctx.db.monitor.findOne({ _id });
         if (!m) throw new BadRequestError();
-        await this.ctx.db.monitor.remove({ _id }, {});
+        await serializeMonitorEdit(this.ctx.db.monitor, () => this.ctx.db.monitor.remove({ _id }, {}));
         this.response.body = { success: true };
     }
 
     async postCleanAll() {
-        await this.ctx.db.monitor.remove({}, { multi: true });
+        await serializeMonitorEdit(this.ctx.db.monitor, () => this.ctx.db.monitor.remove({}, { multi: true }));
         this.response.body = { success: true };
     }
 
     async postUpdateAll(params) {
-        const {
-            name, group, camera, desktop, ips,
-        } = params;
-        const monitors = await this.ctx.db.monitor.find({ ...ips ? { ip: { $in: ips.split('\n').map((ip) => ip.trim()) } } : {} });
-        for (const monitor of monitors) {
-            this.ctx.db.monitor.update({ _id: monitor._id }, {
-                $set: {
-                    ...name && name !== 'del' && { name: name.replace(/\[(.+?)]/g, (_, key) => monitor[key]) },
-                    ...group && group !== 'del' && {
-                        group: group.replace(/\[(.+?)]/g, (_, key) => {
-                            key = key.split(':');
-                            if (key.length === 1) return monitor[key[0]];
-                            if (!(monitor[key[0]] ?? '')) return '';
-                            if ((monitor[key[0]] ?? '').length <= key[1]) return monitor[key[0]];
-                            return monitor[key[0]].substring(0, key[1]);
-                        }),
-                    },
-                    ...camera && camera !== 'del' && { camera: camera.replace(/\[(.+?)]/g, (_, key) => monitor[key]) },
-                    ...desktop && desktop !== 'del' && { desktop: desktop.replace(/\[(.+?)]/g, (_, key) => monitor[key]) },
-                },
-                $unset: {
-                    ...name === 'del' && { name: '' },
-                    ...group === 'del' && { group: '' },
-                    ...camera === 'del' && { camera: '' },
-                    ...desktop === 'del' && { desktop: '' },
-                },
-            });
-        }
-        this.response.body = { success: true };
+        try { this.response.body = await applyMonitorEdit(this.ctx.db.monitor, { ...params, _id: undefined }); } catch (error) { throw new BadRequestError(error.message); }
+    }
+
+    async postPreviewAll(params) {
+        try { this.response.body = await applyMonitorEdit(this.ctx.db.monitor, { ...params, _id: undefined }, true); } catch (error) { throw new BadRequestError(error.message); }
     }
 }
 
@@ -177,7 +143,7 @@ async function saveMonitorInfo(ctx: Context, monitor: any) {
     if (!shouldSetBssid) unsetPayload.wifiBssid = 1;
     const updateDoc: Record<string, any> = { $set: setPayload };
     if (Object.keys(unsetPayload).length) updateDoc.$unset = unsetPayload;
-    await ctx.db.monitor.updateOne({ mac }, updateDoc, { upsert: true });
+    await serializeMonitorEdit(ctx.db.monitor, () => ctx.db.monitor.updateOne({ mac }, updateDoc, { upsert: true }));
 }
 
 class MachineProbeConnectionHandler extends ConnectionHandler<Context> {
@@ -187,7 +153,7 @@ class MachineProbeConnectionHandler extends ConnectionHandler<Context> {
 
     async prepare() {
         const expected = String(config.monitor.reportToken || '');
-        if (expected && String(this.request.query?.token || '') !== expected) {
+        if (!validReportToken(expected, this.request.query?.token)) {
             throw new ForbiddenError('Invalid report token');
         }
     }
@@ -199,10 +165,12 @@ class MachineProbeConnectionHandler extends ConnectionHandler<Context> {
             if (inFlight && (inFlight.pending || []).includes(this.mac)) return;
             this.inFlightCommandId = '';
         }
-        const command = await this.ctx.db.command.findOne({ pending: this.mac });
+        const command = await claimNextCommand(this.ctx.db.command, this.mac);
         if (!command) return;
         this.inFlightCommandId = command._id;
-        this.send({ type: 'command', id: command._id, command: command.command });
+        this.send({
+            type: 'command', id: command._id, command: command.command, expiresAt: commandDeadline(command),
+        });
     }
 
     dispatchCommands() {
@@ -263,20 +231,8 @@ class MachineProbeConnectionHandler extends ConnectionHandler<Context> {
             await this.dispatchCommands();
             return;
         }
-        const stdout = String(payload.stdout || '').slice(0, 64 * 1024);
-        const stderr = String(payload.stderr || '').slice(0, 64 * 1024);
-        const output = [
-            `exitCode: ${Number(payload.exitCode)}`,
-            stdout && `stdout:\n${stdout}`,
-            stderr && `stderr:\n${stderr}`,
-        ].filter(Boolean).join('\n');
-        await this.ctx.db.command.updateOne(
-            { _id: command._id, target: this.mac, pending: this.mac },
-            {
-                $set: { [`executionResult.${this.mac}`]: output || '(No output)' },
-                $pull: { pending: this.mac },
-            },
-        );
+        if (!command.dispatched?.includes(this.mac)) throw new ForbiddenError('Command was not dispatched to this probe');
+        await saveCommandResult(this.ctx.db.command, command._id, this.mac, commandResult(payload));
         if (this.inFlightCommandId === command._id) this.inFlightCommandId = '';
         this.send({ type: 'result-ack', id: command._id });
         await this.dispatchCommands();
@@ -284,6 +240,10 @@ class MachineProbeConnectionHandler extends ConnectionHandler<Context> {
 
     async message(payload) {
         if (!payload || typeof payload !== 'object') throw new BadRequestError('Invalid probe message');
+        if (payload.type === 'test') {
+            this.send({ type: 'test-ok' });
+            return;
+        }
         if (payload.type === 'hello' || payload.type === 'report') {
             await this.saveProbe(payload.probe);
             if (payload.type === 'hello') this.send({ type: 'welcome' });
@@ -308,7 +268,7 @@ class MonitorReportHandler extends Handler {
 
     async post(params) {
         const expected = String(config.monitor.reportToken || '');
-        if (expected && String(this.request.query?.token || '') !== expected) {
+        if (!validReportToken(expected, this.request.query?.token)) {
             throw new ForbiddenError('Invalid report token');
         }
         if (!params.mac) throw new BadRequestError();

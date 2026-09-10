@@ -3,7 +3,7 @@ import {
 } from '@mantine/core';
 import {
   IconBalloonFilled, IconDeviceHeartMonitor, IconHome, IconMenu2,
-  IconPrinter, IconTerminal2, IconUsersGroup,
+  IconPrinter, IconSettings, IconTerminal2, IconUsersGroup,
 } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 import React from 'react';
@@ -22,6 +22,8 @@ const mainLinks = [{
   id: 'monitor', path: '/monitor', label: 'Monitor', Icon: IconDeviceHeartMonitor,
 }, {
   id: 'commands', path: '/commands', label: 'Commands', Icon: IconTerminal2,
+}, {
+  id: 'operations', path: '/operations', label: 'Checks', Icon: IconSettings,
 }, {
   id: 'presentation-teams', path: '/presentation-teams', label: 'Teams', Icon: IconUsersGroup,
 }];

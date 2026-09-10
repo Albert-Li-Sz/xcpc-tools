@@ -1,3 +1,5 @@
+import './BalloonsTable.css';
+
 import {
   ActionIcon, Badge, Group, LoadingOverlay, Stack, Table, Text,
   ThemeIcon, Tooltip,
@@ -5,10 +7,9 @@ import {
 import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import {
-  IconAwardFilled, IconCheck, IconHourglassEmpty, IconPrinter, IconRefresh, IconSend,
+  IconAlertTriangle, IconAwardFilled, IconCheck, IconHourglassEmpty, IconPrinter, IconRefresh, IconSend,
 } from '@tabler/icons-react';
 import React from 'react';
-import './BalloonsTable.css';
 
 interface BalloonRowProps {
   balloon: any;
@@ -66,11 +67,11 @@ const BalloonRow = React.memo(({ balloon, refresh }: BalloonRowProps) => {
         <ThemeIcon
           radius="xl"
           size="sm"
-          color={balloon.printDone ? 'green' : balloon.receivedAt ? 'blue' : 'gray'}
+          color={balloon.restoreReview ? 'orange' : balloon.printDone ? 'green' : balloon.receivedAt ? 'blue' : 'gray'}
           role="img"
-          aria-label={balloon.printDone ? 'Done' : balloon.receivedAt ? 'Sent to printer' : 'Waiting'}
+          aria-label={balloon.restoreReview ? 'Needs review' : balloon.printDone ? 'Done' : balloon.receivedAt ? 'Sent to printer' : 'Waiting'}
         >
-          { balloon.printDone ? <IconCheck /> : balloon.receivedAt ? <IconPrinter /> : <IconHourglassEmpty /> }
+          { balloon.restoreReview ? <IconAlertTriangle /> : balloon.printDone ? <IconCheck /> : balloon.receivedAt ? <IconPrinter /> : <IconHourglassEmpty /> }
         </ThemeIcon>
       </Table.Td>
       <Table.Td style={{ width: 180, minWidth: 180, maxWidth: 180 }}>
@@ -79,7 +80,9 @@ const BalloonRow = React.memo(({ balloon, refresh }: BalloonRowProps) => {
           <Text size="xs" c="dimmed" ff="monospace">#{balloon.balloonid}</Text>
         </Stack>
       </Table.Td>
-      <Table.Td style={{ width: 130, minWidth: 130, maxWidth: 130, textAlign: 'center' }}>
+      <Table.Td style={{
+        width: 130, minWidth: 130, maxWidth: 130, textAlign: 'center',
+      }}>
         <Stack gap={5} align="center">
           <Group gap="xs" wrap="nowrap">
             <Badge
@@ -113,6 +116,7 @@ const BalloonRow = React.memo(({ balloon, refresh }: BalloonRowProps) => {
       <Table.Td>
         <Stack gap={3}>
           <Text size="sm" lineClamp={1}>{balloon.team}</Text>
+          {balloon.restoreReview && <Text size="xs" c="orange.8">Restored from backup — verify delivery before reprinting.</Text>}
           <Group justify="space-between" align="flex-end" gap="xs" wrap="nowrap">
             <Group gap={3} wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
               {(Object.values(balloon.total) as any[]).map((t) => (
@@ -187,7 +191,9 @@ export function BalloonsTable({ balloons, refresh }) {
           <Table.Tr>
             <Table.Th aria-label="Status" style={{ width: 40 }} />
             <Table.Th style={{ width: 180, minWidth: 180, maxWidth: 180 }}>Time</Table.Th>
-            <Table.Th style={{ width: 130, minWidth: 130, maxWidth: 130, textAlign: 'center' }}>Solved</Table.Th>
+            <Table.Th style={{
+              width: 130, minWidth: 130, maxWidth: 130, textAlign: 'center',
+            }}>Solved</Table.Th>
             <Table.Th style={{ width: 120, minWidth: 120, maxWidth: 120 }}>Location</Table.Th>
             <Table.Th>Team</Table.Th>
             <Table.Th className="balloons-table-actions-cell balloons-table-actions-header">

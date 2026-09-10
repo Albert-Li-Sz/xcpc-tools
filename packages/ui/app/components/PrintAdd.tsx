@@ -29,7 +29,7 @@ export function PrintTaskAdd({ refresh, groups = [] }) {
   };
 
   const uploadPrint = async () => {
-    if (!file) return;
+    if (!file || !tname.trim() || !file.size || file.size > 256 * 1024) return;
     setUploading(true);
     try {
       const formData = new FormData();
@@ -72,7 +72,15 @@ export function PrintTaskAdd({ refresh, groups = [] }) {
         <LoadingOverlay visible={uploading} zIndex={1000} overlayProps={{ radius: 'sm', blur: 2 }} />
         <Fieldset legend="Print Code" mb="lg">
           <FocusTrap active>
-            <TextInput label="tname" placeholder="Team Name" value={tname} onChange={(e) => setTname(e.currentTarget.value)} data-autofocus />
+            <TextInput
+              label="Team name"
+              placeholder="Team Name"
+              required
+              maxLength={256}
+              value={tname}
+              onChange={(event) => setTname(event.currentTarget.value)}
+              data-autofocus
+            />
             <TextInput label="Location" placeholder="Seat or location prefix" value={location} onChange={(e) => setLocation(e.currentTarget.value)} />
             <Select
               clearable
@@ -83,7 +91,14 @@ export function PrintTaskAdd({ refresh, groups = [] }) {
               data={groups}
             />
             { /* @ts-ignore */ }
-            <FileInput label="Upload Code Files" placeholder='Click To Upload Code Files' value={file} onChange={selectFile} />
+            <FileInput
+              label="Upload Code Files"
+              placeholder='Click To Upload Code Files'
+              description="One nonempty source file, up to 256 KiB."
+              error={file && (!file.size || file.size > 256 * 1024) ? 'Select a nonempty file no larger than 256 KiB.' : undefined}
+              value={file}
+              onChange={selectFile}
+            />
             <Select
               label="Code Language"
               placeholder="Select language"
@@ -93,7 +108,11 @@ export function PrintTaskAdd({ refresh, groups = [] }) {
             />
           </FocusTrap>
         </Fieldset>
-        <Button color="blue" fullWidth mt="md" radius="md" disabled={!file} onClick={uploadPrint}>Submit</Button>
+        <Button
+          color="blue" fullWidth mt="md" radius="md"
+          disabled={!file || !tname.trim() || !file.size || file.size > 256 * 1024}
+          onClick={uploadPrint}
+        >Submit</Button>
       </Modal>
       <Button
         size="xs"

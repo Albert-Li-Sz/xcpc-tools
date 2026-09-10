@@ -60,7 +60,7 @@ function isPresentationData(value: unknown): value is PresentationData {
             && (team.logoCandidates === undefined
                 || (Array.isArray(team.logoCandidates)
                     && team.logoCandidates.every((logo) => typeof logo === 'string')))
-        ))
+        )),
     );
 }
 
@@ -214,11 +214,13 @@ function PresentationFooter({
                 </div>
                 <span
                     className={`presentation-connection presentation-connection-${toolsConnection}`}
-                    title={`Tools: ${toolsConnection}`}
+                    role="status"
+                    aria-label={`Tools: ${toolsConnection}`}
                 >Tools</span>
                 <span
                     className={`presentation-connection presentation-connection-${ojConnection}`}
-                    title={`OJ: ${ojConnection}`}
+                    role="status"
+                    aria-label={`OJ: ${ojConnection}`}
                 >OJ</span>
                 <span>{ip}</span>
             </div>

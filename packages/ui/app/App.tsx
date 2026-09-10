@@ -9,6 +9,7 @@ import ClientStatus from './pages/ClientStatus';
 import Commands from './pages/Commands';
 import Dashboard from './pages/Dashboard';
 import Monitor from './pages/Monitor';
+import Operations from './pages/Operations';
 import PresentationTeams from './pages/PresentationTeams';
 import Print from './pages/Print';
 import Resolver from './Resolver';
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="/balloon" element={<Balloon />} />
               <Route path="/monitor" element={<Monitor />} />
               <Route path="/commands" element={<Commands />} />
+              <Route path="/operations" element={<Operations />} />
             </Route>
             <Route path="/resolver" element={<Resolver />} />
           </>

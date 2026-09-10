@@ -30,6 +30,18 @@ export interface PrintCodeDoc {
     code?: string;
     group?: string;
     targetPrinter?: string;
+    stage?: 'queued' | 'assigned' | 'printing' | 'needs_review' | 'failed' | 'done';
+    claimId?: string;
+    allocationId?: string;
+    attemptCount?: number;
+    lastError?: string;
+}
+
+export interface PrintRequestDoc {
+    _id: string;
+    state: 'pending' | 'empty' | 'allocated';
+    taskId?: string;
+    createdAt: number;
 }
 
 export interface MonitorDoc {
@@ -67,6 +79,21 @@ export interface CommandTask {
     target: string[];
     pending: string[];
     executionResult: Record<string, string>;
+    expiresAt?: number;
+    dispatched?: string[];
+    results?: Record<string, CommandResult>;
+    summary?: {
+        total: number; completed: number; pending: number; running: number;
+        succeeded: number; failed: number; timedOut: number; cancelled: number; expired: number;
+    };
+}
+
+export interface CommandResult {
+    status: 'succeeded' | 'failed' | 'timed_out' | 'cancelled' | 'expired';
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+    finishedAt: number;
 }
 
 export interface ClientDoc {

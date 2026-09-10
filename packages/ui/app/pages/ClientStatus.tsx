@@ -48,7 +48,7 @@ interface ClientStatusData {
   };
 }
 
-const formatTime = (value?: number) => value ? new Date(value).toLocaleString() : 'Never';
+const formatTime = (value?: number) => (value ? new Date(value).toLocaleString() : 'Never');
 
 const formatDuration = (value: number) => {
   const seconds = Math.floor(value / 1000);
@@ -62,6 +62,7 @@ const formatDuration = (value: number) => {
 
 const stageColor = (stage: string) => {
   if (stage === 'done') return 'green';
+  if (stage === 'needs_review') return 'orange';
   if (stage === 'failed') return 'red';
   if (stage === 'printing' || stage === 'confirming') return 'blue';
   return 'gray';

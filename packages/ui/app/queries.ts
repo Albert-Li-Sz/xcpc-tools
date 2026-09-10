@@ -28,9 +28,18 @@ export const presentationTeamsQuery = () => queryOptions({
   staleTime: 5_000,
 });
 
-export const printQuery = () => queryOptions({
-  queryKey: ['tasks'],
-  queryFn: ({ signal }) => fetchJson<any>('/print', signal),
+interface HistoryParams { page?: number; search?: string; status?: string; group?: string }
+const historySearchParams = (params: HistoryParams) => new URLSearchParams({
+  page: String(params.page || 1),
+  pageSize: '50',
+  search: params.search || '',
+  status: params.status || 'all',
+  ...(params.group ? { group: params.group } : {}),
+}).toString();
+
+export const printQuery = (params: HistoryParams = {}) => queryOptions({
+  queryKey: ['tasks', historySearchParams(params)],
+  queryFn: ({ signal }) => fetchJson<any>(`/print?${historySearchParams(params)}`, signal),
   staleTime: 5_000,
 });
 
@@ -46,10 +55,16 @@ export const monitorQuery = () => queryOptions({
   staleTime: 10_000,
 });
 
-export const commandsQuery = () => queryOptions({
-  queryKey: ['commands'],
-  queryFn: ({ signal }) => fetchJson<any>('/commands', signal),
+export const commandsQuery = (params: HistoryParams = {}) => queryOptions({
+  queryKey: ['commands', 'list', historySearchParams(params)],
+  queryFn: ({ signal }) => fetchJson<any>(`/commands?${historySearchParams(params)}`, signal),
   staleTime: 5_000,
+});
+
+export const commandDetailQuery = (id: string, page = 1) => queryOptions({
+  queryKey: ['commands', 'detail', id, page],
+  queryFn: ({ signal }) => fetchJson<any>(`/commands?id=${encodeURIComponent(id)}&page=${page}&pageSize=10`, signal),
+  staleTime: 1_000,
 });
 
 export const clientStatusQuery = () => queryOptions({

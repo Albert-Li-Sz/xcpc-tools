@@ -28,7 +28,7 @@ const checkPortAvailable = (host: string, port: number) => new Promise<void>((re
 class ClientHomeHandler extends Handler {
     async get() {
         this.response.addHeader('Cache-Control', 'no-store');
-        this.response.addHeader('Content-Security-Policy', "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+        this.response.addHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
         this.response.type = 'text/html';
         this.response.body = StaticHTML({ clientMode: true }, frontendHash);
     }

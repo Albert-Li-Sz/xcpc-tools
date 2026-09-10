@@ -15,7 +15,6 @@ config.json
 config.*.yaml
 config.*.json
 data*
-yarn.lock
 pnpm-lock.yaml
 
 .yarn/cache
@@ -41,4 +40,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
+.xcpc-tools.lock
+.xcpc-restore-*
+backups/
+test-results/
+playwright-report/

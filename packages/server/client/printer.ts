@@ -8,18 +8,22 @@ import { config } from '../config';
 import {
     fs, getPrinters, initWinPrinter, Logger, print, randomstring, sleep,
 } from '../utils';
+import { acquireDataLock } from '../utils/instanceLock';
+import { PrintJournal, PrintJournalEntry, recoveredPrintStage } from './printJournal';
 import {
-    setClientConnection, setPrinterStatus, updateClientTask,
+    sanitizedError, setClientConnection, setPrinterStatus, updateClientTask,
 } from './status';
 import { createTypstCompiler, generateTypst } from './typst';
 
 let compiler;
 
-const post = (url: string) => superagent.post(new URL(url, config.server).toString()).set('Accept', 'application/json');
+const post = (url: string) => superagent.post(new URL(url, config.server).toString())
+    .set('Accept', 'application/json').timeout({ response: 10000, deadline: 15000 });
 const logger = new Logger('printer');
 
 let timer = null;
-const CLIENT_PROTOCOL_VERSION = 2;
+const CLIENT_PROTOCOL_VERSION = 4;
+let journal: PrintJournal;
 
 const configuredPrinters = () => {
     const printers = (config.printers || []).map((item: any) => (
@@ -95,7 +99,7 @@ export async function ConvertCodeToPDF(code: Buffer, lang, filename, team, locat
     }
 }
 
-export async function printFile(docs, targetPrinter = '') {
+export async function printFile(docs, targetPrinter = '', beforeSubmit: () => Promise<void> = async () => {}, afterSubmit: () => void = () => {}) {
     let finalFile = null;
     const files = [];
     for (const doc of docs) {
@@ -113,8 +117,10 @@ export async function printFile(docs, targetPrinter = '') {
             createAt,
             config.printColor,
         );
-        fs.writeFileSync(path.resolve(process.cwd(), `data${path.sep}${tid}#${_id}.pdf`), pdf);
-        files.push(path.resolve(process.cwd(), `data${path.sep}${tid}#${_id}.pdf`));
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(_id)) throw new Error('Invalid print task ID');
+        const pdfPath = path.resolve(process.cwd(), 'data', `${_id}.pdf`);
+        fs.writeFileSync(pdfPath, pdf, { mode: 0o600 });
+        files.push(pdfPath);
     }
     if (files.length === 1) {
         finalFile = files[0];
@@ -140,7 +146,9 @@ export async function printFile(docs, targetPrinter = '') {
             for (const doc of docs) {
                 updateClientTask('print', doc._id, `${doc.location || 'Unknown seat'} · ${doc.filename}`, 'printing', { printer: randomP.printer });
             }
+            await beforeSubmit();
             await print(finalFile, randomP.printer, 1, files.length > 1 ? undefined : config.printPageMax);
+            afterSubmit();
             return randomP.printer;
         }
         logger.info(`No idle ${targetPrinter || 'enabled'} printer found, sleeping...`);
@@ -149,129 +157,109 @@ export async function printFile(docs, targetPrinter = '') {
     throw new Error('No Printer Configured');
 }
 
-async function releasePrintTask(c, doc, printError) {
-    const message = printError instanceof Error ? printError.message : String(printError);
-    while (true) {
+async function reconcileJournal(c) {
+    for (const entry of journal.list()) {
+        const stage = recoveredPrintStage(entry.stage);
+        const current = { ...entry, stage };
+        if (stage !== entry.stage) journal.save([current]);
+        const { doc, printer } = current;
+        const label = `${doc.location || 'Unknown seat'} · ${doc.filename}`;
         try {
-            await post(`${c.server}client/${c.token}/releaseprint/${doc._id}`).send({ error: message });
-            setClientConnection('print', true);
-            logger.info(`Released print task ${doc.tid}#${doc._id} for redistribution.`);
-            return;
-        } catch (error) {
-            const status = Number((error as any)?.status);
-            if (status === 400 || status === 404) {
-                setClientConnection('print', true);
-                logger.warn(`Print task ${doc.tid}#${doc._id} no longer belongs to this client.`);
-                return;
+            const params = { claimId: doc.claimId, printer, error: current.error || 'Client restarted before task completion' };
+            if (stage === 'confirming') {
+                await post(`${c.server}client/${c.token}/doneprint/${doc._id}`).send(params);
+                updateClientTask('print', doc._id, label, 'done', { printer });
+                journal.remove(doc.claimId!);
+            } else if (stage === 'release') {
+                await post(`${c.server}client/${c.token}/releaseprint/${doc._id}`).send(params);
+                updateClientTask('print', doc._id, label, 'failed', { printer, error: params.error });
+                journal.remove(doc.claimId!);
+            } else {
+                await post(`${c.server}client/${c.token}/progressprint/${doc._id}`).send({ ...params, stage: 'needs_review' });
+                updateClientTask('print', doc._id, label, 'needs_review', { printer, error: params.error });
             }
-            setClientConnection('print', false, error);
-            logger.error(`Failed to release print task ${doc.tid}#${doc._id}, retrying...`, error);
-            await sleep(3000);
+            setClientConnection('print', true);
+        } catch (error) {
+            if ([400, 404].includes(Number((error as any)?.status))) {
+                journal.remove(doc.claimId!);
+                updateClientTask('print', doc._id, label, 'failed', {
+                    printer, error: 'Task changed on server; local job retired without reprinting',
+                });
+            } else {
+                setClientConnection('print', false, error);
+                logger.error('Unable to reconcile persisted print progress', error);
+            }
         }
     }
 }
 
 async function fetchTask(c) {
     if (timer) clearTimeout(timer);
-    logger.info('Fetching Task from tools server...');
     try {
+        await reconcileJournal(c);
         const printerConfigs = configuredPrinters();
         const printerGroups = new Map(printerConfigs.map((item) => [item.printer, item.group]));
         const enabledPrinters = printerConfigs.map((item) => item.printer);
         const printersInfo: any[] = await getPrinters();
         setPrinterStatus(printersInfo, enabledPrinters);
-        const tasks = [];
+        const entries: PrintJournalEntry[] = [];
         let targetPrinter = '';
         for (let i = 0; i < config.printMergeQueue; i++) {
-            const { body } = await post(`${c.server}client/${c.token}/print`)
-                .send({
-                    protocolVersion: CLIENT_PROTOCOL_VERSION,
-                    printers: enabledPrinters,
-                    printersInfo: printersInfo.map((p) => ({
-                        printer: p.printer,
-                        status: p.status,
-                        description: p.description,
-                        group: printerGroups.get(p.printer) || undefined,
-                    })),
-                    preferredTargetPrinter: targetPrinter || undefined,
-                });
+            const request = journal.beginRequest(targetPrinter);
+            const { body } = await post(`${c.server}client/${c.token}/print`).send({
+                protocolVersion: CLIENT_PROTOCOL_VERSION,
+                requestId: request.id,
+                printers: enabledPrinters,
+                printersInfo: printersInfo.map((p) => ({ ...p, group: printerGroups.get(p.printer) || undefined })),
+                preferredTargetPrinter: request.printer || undefined,
+            });
             setClientConnection('print', true);
-            if (body.doc) {
-                const assignedPrinter = String(body.targetPrinter || body.doc.targetPrinter || '');
-                if (targetPrinter && assignedPrinter && assignedPrinter !== targetPrinter) {
-                    throw new Error(`Server mixed physical printers in one merge queue: ${targetPrinter} and ${assignedPrinter}`);
-                }
-                targetPrinter ||= assignedPrinter;
-                tasks.push(body.doc);
-                updateClientTask(
-                    'print',
-                    body.doc._id,
-                    `${body.doc.location || 'Unknown seat'} · ${body.doc.filename}`,
-                    'received',
-                    { printer: targetPrinter },
-                );
-            }
+            if (!body.doc) { journal.acceptRequest(); break; }
+            if (!body.doc.claimId) throw new Error('Server did not return a print claim; upgrade the server');
+            const printer = String(body.targetPrinter || body.doc.targetPrinter || '');
+            const entry: PrintJournalEntry = { doc: body.doc, printer, stage: 'received' };
+            journal.acceptRequest(entry);
+            if (targetPrinter && printer !== targetPrinter) throw new Error('Server mixed physical printers in one queue');
+            targetPrinter = printer;
+            entries.push(entry);
+            updateClientTask('print', entry.doc._id, entry.doc.filename, 'received', { printer });
         }
-        if (tasks.length) {
-            logger.info(`Print task ${tasks.map((t) => `${t.tid}#${t._id}`).join(', ')}...`);
-            let printer = null;
+        if (entries.length) {
             try {
-                printer = await printFile(tasks, targetPrinter);
-                if (!printer) throw new Error('No Printer Configured');
-            } catch (e) {
-                for (const doc of tasks) {
-                    updateClientTask('print', doc._id, `${doc.location || 'Unknown seat'} · ${doc.filename}`, 'failed', {
-                        printer: targetPrinter,
-                        error: e,
-                    });
-                }
-                await Promise.all(tasks.map((doc) => releasePrintTask(c, doc, e)));
-                logger.error(e);
-            }
-            if (printer) {
-                for (const doc of tasks) {
-                    updateClientTask('print', doc._id, `${doc.location || 'Unknown seat'} · ${doc.filename}`, 'confirming', { printer });
-                    let confirmed = false;
-                    let rejected = false;
-                    while (!confirmed) {
-                        try {
-                            await post(`${c.server}client/${c.token}/doneprint/${doc._id}`).query({ printer });
-                            setClientConnection('print', true);
-                            confirmed = true;
-                        } catch (error) {
-                            if (Number((error as any)?.status) === 400) {
-                                setClientConnection('print', true);
-                                updateClientTask('print', doc._id, `${doc.location || 'Unknown seat'} · ${doc.filename}`, 'failed', {
-                                    printer,
-                                    error,
-                                });
-                                logger.error(`Server rejected print completion for ${doc.tid}#${doc._id}; the task may have been reset by an administrator.`, error);
-                                rejected = true;
-                                break;
-                            }
-                            setClientConnection('print', false, error);
-                            logger.error(`Failed to confirm print task ${doc.tid}#${doc._id}, retrying...`, error);
-                            await sleep(3000);
-                        }
+                await printFile(entries.map((entry) => entry.doc), targetPrinter, async () => {
+                    journal.save(entries.map((entry) => ({ ...entry, stage: 'submitting' })));
+                    for (const entry of entries) {
+                        await post(`${c.server}client/${c.token}/progressprint/${entry.doc._id}`).send({
+                            claimId: entry.doc.claimId, stage: 'printing',
+                        });
                     }
-                    if (rejected) continue;
-                    updateClientTask('print', doc._id, `${doc.location || 'Unknown seat'} · ${doc.filename}`, 'done', { printer });
-                    logger.info(`Print task ${doc.tid}#${doc._id} completed.`);
-                }
+                }, () => {
+                    journal.save(entries.map((entry) => ({ ...entry, stage: 'confirming' })));
+                });
+            } catch (error) {
+                const claims = new Set(entries.map((entry) => entry.doc.claimId));
+                journal.save(journal.list().filter((entry) => claims.has(entry.doc.claimId)).map((entry) => ({
+                    ...entry,
+                    stage: recoveredPrintStage(entry.stage),
+                    error: sanitizedError(error),
+                })));
+                logger.error(error);
             }
-        } else {
-            logger.info('No print task, sleeping...');
-            await sleep(5000);
+            await reconcileJournal(c);
         }
-    } catch (e) {
-        setClientConnection('print', false, e);
-        logger.error(e);
-        await sleep(5000);
+    } catch (error) {
+        setClientConnection('print', false, error);
+        logger.error(error);
     }
-    timer = setTimeout(() => fetchTask(c), 3000);
+    timer = setTimeout(() => fetchTask(c), 5000);
 }
 
 export async function apply() {
+    const directory = path.resolve(process.cwd(), 'data/print-journal');
+    fs.ensureDirSync(directory);
+    const release = acquireDataLock(directory);
+    process.once('exit', release);
+    journal = new PrintJournal(config.server, config.token);
     compiler = await createTypstCompiler();
     const printers = configuredPrinters();
     if (process.platform === 'win32') {
@@ -283,5 +271,5 @@ export async function apply() {
         }
     }
     if (config.token && config.server && printers.length) await fetchTask(config);
-    else logger.error('Config not found, please check the config.yaml');
+    else logger.error('Config not found, please check the config.client.yaml');
 }

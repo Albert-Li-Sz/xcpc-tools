@@ -19,3 +19,8 @@ interface WindowContext {
 interface Window {
   Context: WindowContext;
 }
+
+declare module '*.sh?raw' {
+  const source: string;
+  export default source;
+}

@@ -144,7 +144,7 @@ export default function Monitor() {
   const pageCount = Math.max(1, Math.ceil(activeMonitors.length / 50));
   const currentPage = Math.min(page, pageCount);
   const visibleMonitors = React.useMemo(
-    () => showAll ? activeMonitors : activeMonitors.slice((currentPage - 1) * 50, currentPage * 50),
+    () => (showAll ? activeMonitors : activeMonitors.slice((currentPage - 1) * 50, currentPage * 50)),
     [activeMonitors, currentPage, showAll],
   );
   const detailMonitor = React.useMemo(
@@ -215,7 +215,9 @@ export default function Monitor() {
             radius="md"
             withBorder
             style={activeView === 'arena'
-              ? { display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column' }
+              ? {
+                display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column',
+              }
               : undefined}
           >
             {query.isPending ? (
